@@ -71,6 +71,11 @@ int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out);
  * when not. */
 int pw_wine_script_pad(PwWinePad *pad, int connected, const PwScriptPad *script, int scripted);
 
+/* Emits WASD edges with a dead zone and hysteresis. Centre releases all keys.
+ * Capacity must be at least four; state is unchanged otherwise. */
+size_t pw_wine_movement_step(uint8_t *held, uint8_t x, uint8_t y,
+                             PwWineInput *out, size_t max);
+
 /* A stick's pointer motion not yet sent, in 1/65536 pixels. Wine keeps
  * the pointer's position: the title sends only motion, as a mouse does
  * (patch 0670), so a game can move or clip the pointer itself and motion

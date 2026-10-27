@@ -262,6 +262,18 @@ int main(void)
     assert(s.inputs_posted==2+PW_WINE_INPUT_QUEUE && s.inputs_delivered==s.inputs_posted);
     assert(s.inputs_dropped==sizeof(bad)/sizeof(bad[0])+2);
 
+    /* Wheel-only reports wake the driver and retain both direction and count. */
+    for (int ticks=-3; ticks<=3; ticks++) {
+        if (!ticks) continue;
+        e=(PwWineInput){PW_WINE_INPUT_MOUSE_WHEEL,0,ticks,0,0};
+        assert(!pw_wine_post_input(&e));
+        assert(pw_wine_next_input(&out) && out.type==PW_WINE_INPUT_MOUSE_WHEEL && out.x==ticks);
+    }
+    e=(PwWineInput){PW_WINE_INPUT_MOUSE_WHEEL,0,0,0,0};
+    assert(pw_wine_post_input(&e)==-1);
+    e=(PwWineInput){PW_WINE_INPUT_MOUSE_WHEEL,0,1,0,1};
+    assert(pw_wine_post_input(&e)==-1);
+
     /* The wake pipe: readable after a post, empty once drained. */
     int fd=pw_wine_input_fd();char drain[64];
     assert(fd>=0 && fd==pw_wine_input_fd());

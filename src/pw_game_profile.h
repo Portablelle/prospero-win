@@ -105,6 +105,7 @@ typedef struct PwGameInput {
     PwGameInputMode mode;
     PwGameStick mouse;
     uint32_t mouse_speed;
+    int left_stick_wasd; /* opt-in keyboard movement, independent of mouse stick */
     PwGameBinding bindings[PW_GAME_BUTTON_COUNT];   /* in PW_GAME_BUTTON order */
     char preset[PW_APP_ID_CAPACITY];
     char player2[PW_APP_ID_CAPACITY];   /* the second pad's preset, profile only */

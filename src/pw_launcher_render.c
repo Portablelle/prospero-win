@@ -257,7 +257,7 @@ static void taskbar(const Canvas *c,const char *status)
         for(int32_t i=0;i<bw;i++)if(!cut(i+30,j,bw+30,bh,30))put(c,i,TASKBAR_Y+6+j,color);
     }
     text(c,(bw-text_width("Play",6))/2,TASKBAR_Y+6+(bh-42)/2,"Play",6,rgb(0xff,0xff,0xff),bw);
-    int32_t hints=text(c,bw+48,TASKBAR_Y+30,"Cross: launch   Options+Create (hold): close",3,
+    int32_t hints=text(c,bw+48,TASKBAR_Y+30,"CROIX: JOUER   OPTIONS: REGLAGES",3,
                        rgb(0xff,0xff,0xff),W-bw-96);
     if(status && *status) {
         int32_t tray=W-(bw+48+hints+48);
@@ -327,4 +327,28 @@ int pw_launcher_navigate(PwLauncherScene *scene,PwLauncherAction action,uint32_t
     default:break;
     }
     return 0;
+}
+
+int pw_launcher_render_settings(const char *name,const char labels[][32],const char values[][64],
+                                unsigned count,unsigned selected,const char *status,const PwPresentTarget *target)
+{
+    if(!target||!target->pixels||target->width!=W||target->height!=H||target->stride<W*4u||
+       (uint64_t)target->stride*H>target->bytes||!labels||!values||selected>=count)return PW_ERR_PRECONDITION;
+    Canvas c={target->pixels,target->stride};
+    ramp(&c,0,0,W,H,rgb(12,28,60),rgb(22,53,91));
+    text(&c,90,54,"REGLAGES DU JEU",6,rgb(255,255,255),1740);
+    text(&c,90,122,name,4,rgb(167,199,238),1740);
+    unsigned first=selected/7*7;
+    char page[]="PAGE 1/3";page[5]=(char)('1'+selected/7);
+    text(&c,1600,122,page,3,rgb(167,199,238),250);
+    for(unsigned i=first;i<count&&i<first+7;i++){
+        int y=205+(int)(i-first)*88;
+        if(i==selected)rounded(&c,72,y-15,1776,76,12,rgb(38,111,181),rgb(28,88,150));
+        text(&c,100,y,labels[i],4,rgb(230,240,255),700);
+        text(&c,830,y,values[i],4,rgb(255,255,255),980);
+    }
+    text(&c,90,845,"HAUT/BAS: LIGNE   GAUCHE/DROITE: MODIFIER",4,rgb(201,223,249),1740);
+    text(&c,90,895,"CARRE: ENREGISTRER   ROND: ANNULER",4,rgb(201,223,249),1740);
+    text(&c,90,977,status,3,rgb(255,218,143),1740);
+    return PW_OK;
 }

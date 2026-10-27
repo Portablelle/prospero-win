@@ -33,6 +33,8 @@
 #endif
 #include "../src/pw_wine_start.h"
 #include "../src/pw_launcher_render.h"
+#include "pw_launcher_settings.h"
+#include <errno.h>
 #include "../src/pw_script_input.h"
 #include "../src/pw_wine_launch.h"
 #include "../src/pw_game_menu.h"
@@ -238,18 +240,18 @@ static char catalog_detail[PW_WINE_LIBRARY_MAX][64];
 static size_t catalog_count;
 static const char *library_root = PW_WINE64_ROOT_SANDBOX;
 
-/* The largest desktop shown: Wine's PS5 driver defaults to 800x600
- * (WINE_PS5_DESKTOP overrides, 1920x1080 for Warcraft III); bigger frames
- * are counted and dropped. */
-enum { PW_WINE64_MAX_FRAME = 1920 * 1200 * 4, PW_WINE64_TICK_US = 16000,
+/* CPU/GDI staging capacity. Vulkan swapchains present directly through RADV.
+ * Allocate larger staging only when the selected desktop needs it. */
+enum { PW_WINE64_BASE_FRAME = 1920 * 1200 * 4, PW_WINE64_TICK_US = 16000,
        PW_WINE64_TICKS_PER_S = 60, PW_WINE64_CLOSE_WAIT_S = 5, PW_WINE64_LEAVE_WAIT_S = 5,
        /* Options+Create are also Start+Select, which games use together:
         * closing takes a hold no game asks for. */
        PW_WINE64_CLOSE_HOLD_S = 3 };
+static size_t frame_capacity = PW_WINE64_BASE_FRAME;
 
 enum { PAD_CREATE = 0x1u, PAD_OPTIONS = 0x8u, PAD_UP = 0x10u, PAD_RIGHT = 0x20u,
        PAD_DOWN = 0x40u, PAD_LEFT = 0x80u, PAD_L1 = 0x400u, PAD_R1 = 0x800u,
-       PAD_CROSS = 0x4000u, PAD_SQUARE = 0x8000u, PAD_CLOSE = PAD_OPTIONS | PAD_CREATE };
+       PAD_CIRCLE = 0x2000u, PAD_CROSS = 0x4000u, PAD_SQUARE = 0x8000u, PAD_CLOSE = PAD_OPTIONS | PAD_CREATE };
 /* The pad core needs a key map to open; the title reads raw edges and maps
  * them with the game's bindings (pw_game_profile). */
 static const PwPadKeyMap pad_open_map[] = { { PAD_CROSS, 0x20, 0, 0, "cross" } };
@@ -461,6 +463,7 @@ static int wine_audio(void *context, const int16_t *frames)
  */
 typedef struct VulkanFrames {
     int resolved;
+    int suppress_gdi, vulkan_active;
     int (*idle)(void);
     int (*show_tiled)(const void *, uint64_t, uint32_t, uint32_t);
     uint32_t *tiled;
@@ -574,12 +577,20 @@ static int vulkan_frames_show(VulkanFrames *vf, uint64_t *sequence, int scaling,
     if (!vf->tiled) return 0;
     if (!vf->idle()) {
         if (!loading->presenting_since) loading->presenting_since = now;
-        else if (now - loading->presenting_since >= PW_WINE64_PRESENTING_MS * 1000000ull)
+        else if (now - loading->presenting_since >= PW_WINE64_PRESENTING_MS * 1000000ull) {
+            vf->vulkan_active = 1;
             loading_done(loading, "vulkan");
+        }
         return 0;
     }
     loading->presenting_since = 0;
-    if (pw_wine_frame_box_take(&frames, sequence, frame_shown, PW_WINE64_MAX_FRAME, &view) == 1 &&
+    /* A slow Vulkan frame does not hand ownership back to GDI. Some PE64
+     * games invalidate their window on mouse/UI events and produce blank
+     * GDI surfaces. Keep the last Vulkan frame instead of flashing those.
+     * Opt-in: mixed GDI/video games retain the original fallback by default.
+     * The initial spinner and movies still work before sustained Vulkan. */
+    if (vf->suppress_gdi && vf->vulkan_active) return 0;
+    if (pw_wine_frame_box_take(&frames, sequence, frame_shown, frame_capacity, &view) == 1 &&
         loading_admits(loading, &view)) {
         const PwPresentFrame frame = { view.pixels, view.width, view.height, view.stride,
                                        PW_PRESENT_BGRX8 };
@@ -834,14 +845,14 @@ static void run_launcher(void)
                pw_result_name(video_status), pw_result_name(pad_status), pw_result_name(hid_status),
                frame != MAP_FAILED,
                (unsigned)catalog_count, (unsigned)launch.cycle, launch.refused, PW_WINE64_SCRIPT);
-    char log_status[80], report_path[96];
-    snprintf(report_path, sizeof(report_path), "GET LOGS OVER FTP: %s/LOGS", library_root);
-    int report_help = 0;
+    static PwLauncherSettings settings;
+    PwWineLibraryEntry *settings_entry = NULL;
+    char log_status[80];
     pw_diagnostics_status(log_status, sizeof(log_status));
     scene.status = log_status;
     for (uint64_t tick = 1; chosen < 0; tick++) {
         pw_diagnostics_tick(now_ns());
-        if (tick % PW_WINE64_TICKS_PER_S == 0 && !report_help) {
+        if (tick % PW_WINE64_TICKS_PER_S == 0) {
             pw_diagnostics_status(log_status, sizeof(log_status)); dirty = 1;
         }
         uint32_t before = scene.selected;
@@ -851,15 +862,42 @@ static void run_launcher(void)
                 { PAD_DOWN, PW_LAUNCHER_ACTION_DOWN }, { PAD_UP, PW_LAUNCHER_ACTION_UP },
                 { PAD_CROSS, PW_LAUNCHER_ACTION_CHOOSE },
             };
-            if (pad.core.pressed_edges & PAD_OPTIONS) {
-                report_help = !report_help;
-                scene.status = report_help ? report_path : log_status;
-                dirty = 1;
+            uint32_t pressed = pad.core.pressed_edges;
+            if (settings.open) {
+                if (pressed & PAD_CIRCLE) { settings.open = 0; dirty = 1; }
+                else if ((pressed & PAD_SQUARE) || ((pressed & PAD_CROSS) && settings.row == 20)) {
+                    if (pw_settings_save(&settings, library_root) == 0) {
+                        settings_entry->profile = settings.draft;
+                        snprintf(catalog_detail[scene.selected], sizeof(catalog_detail[0]), "%ux%u  REGLAGES ENREGISTRES",
+                                 settings.draft.display.width, settings.draft.display.height);
+                        settings.open = 0;
+                        PS5LOG_LOG("PW_SETTINGS saved file=%s", settings.file);
+                    } else {
+                        snprintf(settings.status, sizeof(settings.status), "ECHEC ENREGISTREMENT - PROFIL CONSERVE");
+                        PS5LOG_LOG("PW_SETTINGS save failed file=%s errno=%d", settings.file, errno);
+                    }
+                    dirty = 1;
+                } else {
+                    if (pressed & PAD_UP) settings.row = (settings.row + PW_SETTINGS_ROWS - 1) % PW_SETTINGS_ROWS;
+                    if (pressed & PAD_DOWN) settings.row = (settings.row + 1) % PW_SETTINGS_ROWS;
+                    if (pressed & PAD_LEFT) pw_settings_change(&settings, -1);
+                    if (pressed & (PAD_RIGHT | PAD_CROSS)) pw_settings_change(&settings, 1);
+                    if (pressed) dirty = 1;
+                }
+            } else if ((pressed & PAD_OPTIONS) && scene.selected < catalog_count) {
+                for (uint32_t i = 0; i < library.count; i++)
+                    if (library.entries[i].status == PW_OK &&
+                        !strcmp(library.entries[i].profile.app.id, catalog[scene.selected].id)) {
+                        settings_entry = &library.entries[i];
+                        pw_settings_open(&settings, settings_entry, library_root);
+                        dirty = 1; break;
+                    }
+            } else {
+                for (size_t i = 0; i < sizeof(pad_actions) / sizeof(pad_actions[0]); i++)
+                    if ((pressed & pad_actions[i].button) &&
+                        pw_launcher_navigate(&scene, pad_actions[i].action, (uint32_t)catalog_count))
+                        chosen = (int)scene.selected;
             }
-            for (size_t i = 0; i < sizeof(pad_actions) / sizeof(pad_actions[0]); i++)
-                if ((pad.core.pressed_edges & pad_actions[i].button) &&
-                    pw_launcher_navigate(&scene, pad_actions[i].action, (uint32_t)catalog_count))
-                    chosen = (int)scene.selected;
         }
         /* Key presses; a keyboard plugged in later is found every few seconds. */
         if (hid.ops.load_module) {
@@ -869,7 +907,7 @@ static void run_launcher(void)
                 hid_status = pw_hid_ps5_retry(&hid);
             pw_hid_ps5_poll(&hid, &poll);
             for (size_t i = 0; i < poll.count && chosen < 0; i++)
-                if (poll.events[i].kind == PW_HID_EVENT_KEY && poll.events[i].down &&
+                if (!settings.open && poll.events[i].kind == PW_HID_EVENT_KEY && poll.events[i].down &&
                     pw_launcher_navigate(&scene, pw_launcher_key_action(poll.events[i].code),
                                          (uint32_t)catalog_count))
                     chosen = (int)scene.selected;
@@ -889,7 +927,10 @@ static void run_launcher(void)
                                              PW_LAUNCHER_RENDER_WIDTH * 4u, frame_bytes };
             const PwPresentView view = { frame, target.width, target.height, target.stride,
                                            (uint32_t)frame_bytes };
-            int status = pw_launcher_render(&scene, &target);
+            int status = settings.open ?
+                pw_launcher_render_settings(settings.draft.app.name, settings.labels, settings.values,
+                                            PW_SETTINGS_ROWS, (unsigned)settings.row, settings.status, &target) :
+                pw_launcher_render(&scene, &target);
             if (status == PW_OK) status = pw_videoout_ps5_present(&video, &view);
             if (status != PW_OK) PS5LOG_LOG("PW_WINE64 launcher present=%s", pw_result_name(status));
             dirty = 0;
@@ -1040,6 +1081,7 @@ int main(int argc, char **argv)
     const PwGameProfile *game = NULL;
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0 };
+    uint8_t movement_held = 0;
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
     int (*rumble)(uint32_t *, uint32_t *) = NULL;
@@ -1210,10 +1252,14 @@ int main(int argc, char **argv)
 
             for (size_t i = 0; i < debug_count; i++) {
                 extra[config.extra_env_count++] = (PwWineStartEnv){ debug_env[i].name, debug_env[i].value };
+                if (!strcmp(debug_env[i].name, "PW_VK_GDI_FALLBACK") && !strcmp(debug_env[i].value, "0"))
+                    vulkan_frames.suppress_gdi = 1;
                 if (i) strcat(names, ",");
                 strcat(names, debug_env[i].name);
             }
             if (debug_count) PS5LOG_LOG("PW_WINE64 debug_env=%s", names);
+            if (vulkan_frames.suppress_gdi)
+                PS5LOG_LOG("PW_WINE64 gdi_after_vulkan=disabled policy=retain-last-vulkan-frame");
         }
         /* refresh and opengl_thread set the PS5 OpenGL SDK's output rate and
          * glthread; Zink, which replaced it, has neither, so they are ignored. */
@@ -1318,11 +1364,17 @@ int main(int argc, char **argv)
             game_menu.keyboard = osk_status == PW_OK;
         }
         {
-            uint8_t *storage = mmap(NULL, 2u * PW_WINE64_MAX_FRAME, PROT_READ | PROT_WRITE,
+            if (game) {
+                size_t desktop_bytes = (size_t)game->display.width * game->display.height * 4u;
+                if (desktop_bytes > frame_capacity && desktop_bytes <= 3840u * 2160u * 4u)
+                    frame_capacity = desktop_bytes;
+            }
+            PS5LOG_LOG("PW_WINE64 frame_capacity=%llu", (unsigned long long)frame_capacity);
+            uint8_t *storage = mmap(NULL, 2u * frame_capacity, PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANON, -1, 0);
             if (storage != MAP_FAILED &&
-                pw_wine_frame_box_init(&frames, storage, PW_WINE64_MAX_FRAME) == 0) {
-                frame_shown = storage + PW_WINE64_MAX_FRAME;
+                pw_wine_frame_box_init(&frames, storage, frame_capacity) == 0) {
+                frame_shown = storage + frame_capacity;
                 if (set_present) set_present(wine_present, NULL);
             }
         }
@@ -1519,6 +1571,16 @@ int main(int argc, char **argv)
 #endif
             if (pad_read || scripted) set_pad(connected ? &state : NULL);
         }
+        if (post_input && (game_input.left_stick_wasd || movement_held)) {
+            int active = pad_read && game_input.left_stick_wasd && seen->core.connected;
+            size_t movement_count = pw_wine_movement_step(&movement_held,
+                active ? seen->left_stick.x : 128, active ? seen->left_stick.y : 128,
+                events, sizeof(events) / sizeof(events[0]));
+            for (size_t i = 0; i < movement_count; i++) {
+                if (post_input(&events[i]) == 0) posted++;
+                else refused++;
+            }
+        }
         if (pad_read) {
             size_t count = pw_wine_game_inputs(&game_input, seen->core.pressed_edges,
                                                seen->core.released_edges, events,
@@ -1614,7 +1676,7 @@ int main(int argc, char **argv)
             PwPresentFrame spinner;
             const PwPresentFrame *next;
 
-            if (pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, PW_WINE64_MAX_FRAME,
+            if (pw_wine_frame_box_take(&frames, &shown_sequence, frame_shown, frame_capacity,
                                        &view) == 1 && loading_admits(&loading, &view)) {
                 if (show_scaled(&video, &view, scaling) == PW_OK) {
                     shown++;          /* present waits for the vblank */

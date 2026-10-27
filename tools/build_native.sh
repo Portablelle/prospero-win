@@ -190,7 +190,7 @@ common=(-DPW_BUILD_ID=\""$build_id"\" -O2 -Wall -Wextra -Werror -ffunction-secti
         -DPW_WINE64_ROOT_SANDBOX=\""/download0/${data_root##*/}"\")
 
 sources=(
-    native/wine64_main.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
+    native/wine64_main.c native/pw_launcher_settings.c native/pw_diagnostics.c native/pw_audio_ps5.c native/pw_pad_ps5.c native/pw_agc_ps5.c
     native/pw_agc_submit_lifecycle.c native/pw_videoout_ps5.c native/pw_data_mount.c
     native/pw_lapy_elevation.c
     native/pw_wine_display.c native/pw_wine_library.c native/pw_hid_ps5.c native/pw_osk_ps5.c

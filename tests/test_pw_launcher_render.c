@@ -82,7 +82,7 @@ int main(void)
     uint32_t hashes[3]={render(&library),render(&unavailable),render(&empty)};
     /* Golden frames: a visual change must update these deliberately, after
      * looking at the new rendering. */
-    const uint32_t golden[3]={0x84ed07eau,0x55663296u,0x1155820cu};
+    const uint32_t golden[3]={0x94f3bb3au,0x5ff7dd66u,0x9d7cd5d4u};
     if(memcmp(hashes,golden,sizeof(golden)))
         printf("launcher render hashes 0x%08x 0x%08x 0x%08x\n",hashes[0],hashes[1],hashes[2]);
     assert(!memcmp(hashes,golden,sizeof(golden)));

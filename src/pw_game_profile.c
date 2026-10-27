@@ -3,7 +3,7 @@
 #include <string.h>
 
 enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3,
-       SET_PLAYER2 = 1u << 4 };
+       SET_PLAYER2 = 1u << 4, SET_MOVE = 1u << 5 };
 
 /* DualSense buttons in PW_GAME_BUTTON order, with their scePadRead bits. */
 static const struct { const char *name; uint32_t mask; } buttons[PW_GAME_BUTTON_COUNT] = {
@@ -142,6 +142,14 @@ static int input_field(PwGameInput *input, const uint8_t *key, size_t key_length
         else if (is(v, n, "right_stick")) input->mouse = PW_GAME_STICK_RIGHT;
         else return PW_ERR_UNSUPPORTED;
         input->set |= SET_MOUSE;
+        return PW_OK;
+    }
+    if (is(key, key_length, "left_stick")) {
+        if (input->set & SET_MOVE) return PW_ERR_MALFORMED;
+        if (is(v, n, "wasd")) input->left_stick_wasd = 1;
+        else if (is(v, n, "none")) input->left_stick_wasd = 0;
+        else return PW_ERR_UNSUPPORTED;
+        input->set |= SET_MOVE;
         return PW_OK;
     }
     if (is(key, key_length, "mouse_speed")) {
@@ -561,14 +569,15 @@ void pw_game_input_overlay(PwGameInput *base, const PwGameInput *overrides)
     if (overrides->set & SET_MODE) base->mode = overrides->mode;
     if (overrides->set & SET_MOUSE) base->mouse = overrides->mouse;
     if (overrides->set & SET_SPEED) base->mouse_speed = overrides->mouse_speed;
-    base->set |= overrides->set & (SET_MODE | SET_MOUSE | SET_SPEED);
+    if (overrides->set & SET_MOVE) base->left_stick_wasd = overrides->left_stick_wasd;
+    base->set |= overrides->set & (SET_MODE | SET_MOUSE | SET_SPEED | SET_MOVE);
     for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++)
         if (overrides->bindings[i].kind != PW_GAME_BIND_UNSET) base->bindings[i] = overrides->bindings[i];
 }
 
 void pw_game_input_default_mode(PwGameInput *input)
 {
-    if (!input || (input->set & SET_MODE) || input->mouse != PW_GAME_STICK_NONE) return;
+    if (!input || (input->set & SET_MODE) || input->mouse != PW_GAME_STICK_NONE || input->left_stick_wasd) return;
     for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++)
         if (input->bindings[i].kind != PW_GAME_BIND_UNSET) return;
     input->mode = PW_GAME_INPUT_XINPUT;

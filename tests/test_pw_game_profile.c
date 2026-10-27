@@ -569,6 +569,16 @@ static void test_debug_env(void)
 
 int main(void)
 {
+    PwGameInput move;
+    pw_game_input_init(&move);
+    assert(preset("[input]\nleft_stick = wasd\nmouse = right_stick\n", &move) == PW_OK);
+    assert(move.left_stick_wasd && move.mouse == PW_GAME_STICK_RIGHT);
+    pw_game_input_default_mode(&move);
+    assert(move.mode == PW_GAME_INPUT_KEYBOARD);
+    assert(preset("[input]\nleft_stick = none\n", &move) == PW_OK && !move.left_stick_wasd);
+    assert(preset("[input]\nleft_stick = bogus\n", &move) != PW_OK);
+    assert(preset("[input]\nleft_stick = wasd\nleft_stick = none\n", &move) != PW_OK);
+
     test_graphics_env();
     test_published_forms();
     test_profile();

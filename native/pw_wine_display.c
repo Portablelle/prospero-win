@@ -184,3 +184,28 @@ int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_
     *out = (PwWineInput){ PW_WINE_INPUT_MOUSE_MOVE, 0, (int32_t)dx, (int32_t)dy, 0 };
     return 1;
 }
+
+/* Digital movement for games whose controller backend is unavailable. */
+size_t pw_wine_movement_step(uint8_t *held, uint8_t x, uint8_t y,
+                             PwWineInput *out, size_t max)
+{
+    static const uint16_t keys[4] = { 'W', 'S', 'A', 'D' };
+    if (!held || !out || max < 4) return 0;
+    const int axes[4] = { 128 - (int)y, (int)y - 128,
+                          128 - (int)x, (int)x - 128 };
+    uint8_t next = 0;
+    size_t count = 0;
+    for (unsigned i = 0; i < 4; i++) {
+        uint8_t bit = (uint8_t)(1u << i);
+        if (axes[i] >= ((*held & bit) ? 32 : 48)) next |= bit;
+    }
+    /* Release old directions before pressing new ones on a fast reversal. */
+    for (int down = 0; down <= 1; down++)
+        for (unsigned i = 0; i < 4; i++) {
+            uint8_t bit = (uint8_t)(1u << i);
+            if (((*held ^ next) & bit) && !!(next & bit) == down)
+                out[count++] = (PwWineInput){ PW_WINE_INPUT_KEY, keys[i], 0, 0, down };
+        }
+    *held = next;
+    return count;
+}

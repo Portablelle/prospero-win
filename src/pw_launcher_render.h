@@ -41,4 +41,6 @@ int pw_launcher_navigate(PwLauncherScene *scene, PwLauncherAction action, uint32
  * stride).  The page shown is the one containing the selection. */
 int pw_launcher_render(const PwLauncherScene *scene,const PwPresentTarget *target);
 
+int pw_launcher_render_settings(const char *name,const char labels[][32],const char values[][64],
+                                unsigned count,unsigned selected,const char *status,const PwPresentTarget *target);
 #endif

@@ -326,8 +326,25 @@ static void test_script_pad(void)
     }
 }
 
+static void test_movement(void)
+{
+    uint8_t held = 0;
+    PwWineInput out[4];
+    assert(pw_wine_movement_step(&held, 128, 128, out, 4) == 0);
+    assert(pw_wine_movement_step(&held, 255, 0, out, 4) == 2);
+    assert(held == 9 && out[0].code == 'W' && out[0].down && out[1].code == 'D');
+    assert(pw_wine_movement_step(&held, 170, 90, out, 4) == 0); /* hysteresis */
+    assert(pw_wine_movement_step(&held, 0, 255, out, 3) == 0 && held == 9);
+    assert(pw_wine_movement_step(&held, 0, 255, out, 4) == 4);
+    assert(!out[0].down && !out[1].down && out[2].down && out[3].down);
+    assert(held == 6);
+    assert(pw_wine_movement_step(&held, 128, 128, out, 4) == 2 && held == 0);
+    assert(pw_wine_movement_step(&held, 150, 105, out, 4) == 0);
+}
+
 int main(void)
 {
+    test_movement();
     test_frames();
     test_threads();
     test_inputs();
