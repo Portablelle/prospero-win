@@ -115,6 +115,7 @@ static int model_release(void *context, int64_t offset, size_t bytes)
 
 static const PwWineDmemOps ops = {
     NULL, PAGE, model_reserve, model_allocate, model_map, model_protect, model_unmap, model_release,
+    0, NULL, NULL,
 };
 static PwWineDmem dmem;
 static PwWineDmemRun runs[RUNS];
