@@ -255,6 +255,10 @@ done
 # build before either half can be emitted with a different dispatch table.
 python3 "$root/tools/stage_vk_batch.py" --source "$tree" --repo "$root" ||
     fail "cannot stage Vulkan command-stream runtime"
+# Local: PE64 command-buffer batching (PW_VK_BATCH64=1), a diff against the
+# staged winevulkan tree.
+git -C "$tree" apply "$root/wine/ps5/vk64/pe64-batching.patch" ||
+    fail "cannot apply the PE64 batching patch"
 
 # Stage the pointer-free shared-clock ABI used by PE32 and the provider.
 cp "$root/wine/ps5/time/pw_qpc_clock.h" "$tree/dlls/ntdll/pw_qpc_clock.h" ||
@@ -273,7 +277,7 @@ stamp=$(
       for patch in $ordered; do cat "$patches/$patch"; done
       cat "$root/tools/stage_vk_batch.py" "$root/tools/generate_vk_codecs.py" "$root"/wine/ps5/pw_vk_*.[ch] \
           "$root"/wine/ps5/vulkan/*.[ch] "$root/wine/ps5/time/pw_qpc_clock.h" "$root/wine/ps5/input/pw_key_shared.h" \
-          "$root/wine/ps5/menu/pw_title_menu.h"; } | sha256sum | cut -c1-64)
+          "$root/wine/ps5/menu/pw_title_menu.h" "$root/wine/ps5/vk64/pe64-batching.patch"; } | sha256sum | cut -c1-64)
 build=$work/build
 if [ ! -f "$build/Makefile" ] || [ "$(cat "$build/.prospero-stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$build"

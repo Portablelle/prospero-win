@@ -1,0 +1,781 @@
+--- /dev/null
++++ b/dlls/winevulkan/pw_vk64.h
+@@ -0,0 +1,117 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Native PE64 records. Never feed these to the 32-bit wire decoder. */
++#ifndef PW_VK64_H
++#define PW_VK64_H
++#define PW_VK64_VERSION 0x64000001u
++#define PW_VK64_CAPABILITY 0x50576401u
++#define PW_VK64_NAME "__wine_pw_vk_batch64_v1"
++#define PW_VK64_MAX_BYTES 8192u
++struct pw_vk64_packet { uint32_t version, bytes; uint64_t data; };
++struct pw_vk64_record { uint32_t code, bytes; };
++static inline size_t pw_vk64_align(size_t n) { return (n+7)&~(size_t)7; }
++static inline size_t pw_vk64_params_size(unsigned code)
++{
++ switch(code) {
++ case unix_vkCmdDraw: return sizeof(struct vkCmdDraw_params);
++ case unix_vkCmdDrawIndexed: return sizeof(struct vkCmdDrawIndexed_params);
++ case unix_vkCmdBindPipeline: return sizeof(struct vkCmdBindPipeline_params);
++ case unix_vkCmdBindIndexBuffer: return sizeof(struct vkCmdBindIndexBuffer_params);
++ case unix_vkCmdSetDepthBias: return sizeof(struct vkCmdSetDepthBias_params);
++ case unix_vkCmdDrawIndirect: return sizeof(struct vkCmdDrawIndirect_params);
++ case unix_vkCmdDrawIndexedIndirect: return sizeof(struct vkCmdDrawIndexedIndirect_params);
++ case unix_vkCmdSetLineWidth: return sizeof(struct vkCmdSetLineWidth_params);
++ case unix_vkCmdSetStencilReference: return sizeof(struct vkCmdSetStencilReference_params);
++ case unix_vkCmdSetStencilCompareMask: return sizeof(struct vkCmdSetStencilCompareMask_params);
++ case unix_vkCmdSetStencilWriteMask: return sizeof(struct vkCmdSetStencilWriteMask_params);
++ case unix_vkCmdBindVertexBuffers: return sizeof(struct vkCmdBindVertexBuffers_params);
++ case unix_vkCmdBindDescriptorSets: return sizeof(struct vkCmdBindDescriptorSets_params);
++ case unix_vkCmdPushConstants: return sizeof(struct vkCmdPushConstants_params);
++ case unix_vkCmdSetScissor: return sizeof(struct vkCmdSetScissor_params);
++ case unix_vkCmdSetViewport: return sizeof(struct vkCmdSetViewport_params);
++ default: return 0;
++ }
++}
++static inline size_t pw_vk64_size(unsigned code, const void *args)
++{
++ size_t n=pw_vk64_params_size(code);
++ if(!n)return 0;
++ n=pw_vk64_align(n);
++ switch(code) {
++ case unix_vkCmdBindVertexBuffers: { const struct vkCmdBindVertexBuffers_params *q=args;
++  if(q->bindingCount>32 || (q->bindingCount && !q->pBuffers))return 0; n+=pw_vk64_align((size_t)q->bindingCount*sizeof(VkBuffer));
++  if(q->bindingCount>32 || (q->bindingCount && !q->pOffsets))return 0; n+=pw_vk64_align((size_t)q->bindingCount*sizeof(VkDeviceSize));
++  break; }
++ case unix_vkCmdBindDescriptorSets: { const struct vkCmdBindDescriptorSets_params *q=args;
++  if(q->descriptorSetCount>32 || (q->descriptorSetCount && !q->pDescriptorSets))return 0; n+=pw_vk64_align((size_t)q->descriptorSetCount*sizeof(VkDescriptorSet));
++  if(q->dynamicOffsetCount>64 || (q->dynamicOffsetCount && !q->pDynamicOffsets))return 0; n+=pw_vk64_align((size_t)q->dynamicOffsetCount*sizeof(uint32_t));
++  break; }
++ case unix_vkCmdPushConstants: { const struct vkCmdPushConstants_params *q=args;
++  if(q->size>256 || (q->size && !q->pValues))return 0; n+=pw_vk64_align((size_t)q->size*sizeof(unsigned char));
++  break; }
++ case unix_vkCmdSetScissor: { const struct vkCmdSetScissor_params *q=args;
++  if(q->scissorCount>16 || (q->scissorCount && !q->pScissors))return 0; n+=pw_vk64_align((size_t)q->scissorCount*sizeof(VkRect2D));
++  break; }
++ case unix_vkCmdSetViewport: { const struct vkCmdSetViewport_params *q=args;
++  if(q->viewportCount>16 || (q->viewportCount && !q->pViewports))return 0; n+=pw_vk64_align((size_t)q->viewportCount*sizeof(VkViewport));
++  break; }
++ default: break;
++ }
++ return n;
++}
++static inline int pw_vk64_valid(unsigned code,const void *args,size_t bytes)
++{
++ size_t base=pw_vk64_params_size(code),at;
++ const unsigned char *data=args;
++ if(!base || base>bytes || pw_vk64_size(code,args)!=bytes)return 0;
++ at=pw_vk64_align(base);
++ switch(code) {
++ case unix_vkCmdBindVertexBuffers: { const struct vkCmdBindVertexBuffers_params *q=args;
++  if(q->bindingCount && (const void *)q->pBuffers!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->bindingCount*sizeof(VkBuffer));
++  if(q->bindingCount && (const void *)q->pOffsets!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->bindingCount*sizeof(VkDeviceSize));
++  break; }
++ case unix_vkCmdBindDescriptorSets: { const struct vkCmdBindDescriptorSets_params *q=args;
++  if(q->descriptorSetCount && (const void *)q->pDescriptorSets!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->descriptorSetCount*sizeof(VkDescriptorSet));
++  if(q->dynamicOffsetCount && (const void *)q->pDynamicOffsets!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->dynamicOffsetCount*sizeof(uint32_t));
++  break; }
++ case unix_vkCmdPushConstants: { const struct vkCmdPushConstants_params *q=args;
++  if(q->size && (const void *)q->pValues!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->size*sizeof(unsigned char));
++  break; }
++ case unix_vkCmdSetScissor: { const struct vkCmdSetScissor_params *q=args;
++  if(q->scissorCount && (const void *)q->pScissors!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->scissorCount*sizeof(VkRect2D));
++  break; }
++ case unix_vkCmdSetViewport: { const struct vkCmdSetViewport_params *q=args;
++  if(q->viewportCount && (const void *)q->pViewports!=(const void *)(data+at))return 0; at+=pw_vk64_align((size_t)q->viewportCount*sizeof(VkViewport));
++  break; }
++ default: break;
++ }
++ return 1;
++}
++static inline size_t pw_vk64_encode(unsigned code,const void *args,void *out,size_t capacity)
++{
++ size_t n=pw_vk64_size(code,args),base=pw_vk64_params_size(code),at;
++ unsigned char *data=out;
++ if(!n || n>capacity)return 0;
++ memset(data,0,n);memcpy(data,args,base);at=pw_vk64_align(base);
++ switch(code) {
++ case unix_vkCmdBindVertexBuffers: { const struct vkCmdBindVertexBuffers_params *q=args; struct vkCmdBindVertexBuffers_params *d=out;
++  if(q->bindingCount)memcpy(data+at,q->pBuffers,(size_t)q->bindingCount*sizeof(VkBuffer)); d->pBuffers=q->bindingCount?(const VkBuffer *)(data+at):NULL; at+=pw_vk64_align((size_t)q->bindingCount*sizeof(VkBuffer));
++  if(q->bindingCount)memcpy(data+at,q->pOffsets,(size_t)q->bindingCount*sizeof(VkDeviceSize)); d->pOffsets=q->bindingCount?(const VkDeviceSize *)(data+at):NULL; at+=pw_vk64_align((size_t)q->bindingCount*sizeof(VkDeviceSize));
++  break; }
++ case unix_vkCmdBindDescriptorSets: { const struct vkCmdBindDescriptorSets_params *q=args; struct vkCmdBindDescriptorSets_params *d=out;
++  if(q->descriptorSetCount)memcpy(data+at,q->pDescriptorSets,(size_t)q->descriptorSetCount*sizeof(VkDescriptorSet)); d->pDescriptorSets=q->descriptorSetCount?(const VkDescriptorSet *)(data+at):NULL; at+=pw_vk64_align((size_t)q->descriptorSetCount*sizeof(VkDescriptorSet));
++  if(q->dynamicOffsetCount)memcpy(data+at,q->pDynamicOffsets,(size_t)q->dynamicOffsetCount*sizeof(uint32_t)); d->pDynamicOffsets=q->dynamicOffsetCount?(const uint32_t *)(data+at):NULL; at+=pw_vk64_align((size_t)q->dynamicOffsetCount*sizeof(uint32_t));
++  break; }
++ case unix_vkCmdPushConstants: { const struct vkCmdPushConstants_params *q=args; struct vkCmdPushConstants_params *d=out;
++  if(q->size)memcpy(data+at,q->pValues,(size_t)q->size*sizeof(unsigned char)); d->pValues=q->size?(const unsigned char *)(data+at):NULL; at+=pw_vk64_align((size_t)q->size*sizeof(unsigned char));
++  break; }
++ case unix_vkCmdSetScissor: { const struct vkCmdSetScissor_params *q=args; struct vkCmdSetScissor_params *d=out;
++  if(q->scissorCount)memcpy(data+at,q->pScissors,(size_t)q->scissorCount*sizeof(VkRect2D)); d->pScissors=q->scissorCount?(const VkRect2D *)(data+at):NULL; at+=pw_vk64_align((size_t)q->scissorCount*sizeof(VkRect2D));
++  break; }
++ case unix_vkCmdSetViewport: { const struct vkCmdSetViewport_params *q=args; struct vkCmdSetViewport_params *d=out;
++  if(q->viewportCount)memcpy(data+at,q->pViewports,(size_t)q->viewportCount*sizeof(VkViewport)); d->pViewports=q->viewportCount?(const VkViewport *)(data+at):NULL; at+=pw_vk64_align((size_t)q->viewportCount*sizeof(VkViewport));
++  break; }
++ default: break;
++ }
++ return n;
++}
++#endif
+--- a/dlls/winevulkan/pw_vk_batch_pe.c
++++ b/dlls/winevulkan/pw_vk_batch_pe.c
+@@ -594,3 +594,575 @@
+  }
+ }
+ #endif
++
++#ifdef _WIN64
++#include "pw_vk64.h"
++/* External Vulkan synchronization protects each command buffer. State follows
++ * the buffer, not the recording thread; cross-thread handoff preserves order. */
++struct pw_vk64_stream { struct pw_vk64_stream *next; SRWLOCK lock; size_t used; uint64_t storage[PW_VK64_MAX_BYTES/8]; };
++static SRWLOCK vk64_registry_lock=SRWLOCK_INIT;
++static struct pw_vk64_stream *vk64_streams;
++static LONG vk64_disabled;
++static BOOL vk64_allocator(unsigned int code,const void *args)
++{
++ switch(code){
++ case unix_vkAllocateMemory: return ((const struct vkAllocateMemory_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateAccelerationStructure2KHR: return ((const struct vkCreateAccelerationStructure2KHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateAccelerationStructureKHR: return ((const struct vkCreateAccelerationStructureKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateAccelerationStructureNV: return ((const struct vkCreateAccelerationStructureNV_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateBuffer: return ((const struct vkCreateBuffer_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateBufferView: return ((const struct vkCreateBufferView_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateCommandPool: return ((const struct vkCreateCommandPool_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateComputePipelines: return ((const struct vkCreateComputePipelines_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateCuFunctionNVX: return ((const struct vkCreateCuFunctionNVX_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateCuModuleNVX: return ((const struct vkCreateCuModuleNVX_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDataGraphPipelineSessionARM: return ((const struct vkCreateDataGraphPipelineSessionARM_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDataGraphPipelinesARM: return ((const struct vkCreateDataGraphPipelinesARM_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDebugReportCallbackEXT: return ((const struct vkCreateDebugReportCallbackEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDebugUtilsMessengerEXT: return ((const struct vkCreateDebugUtilsMessengerEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDeferredOperationKHR: return ((const struct vkCreateDeferredOperationKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDescriptorPool: return ((const struct vkCreateDescriptorPool_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDescriptorSetLayout: return ((const struct vkCreateDescriptorSetLayout_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDescriptorUpdateTemplate: return ((const struct vkCreateDescriptorUpdateTemplate_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDescriptorUpdateTemplateKHR: return ((const struct vkCreateDescriptorUpdateTemplateKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateDevice: return ((const struct vkCreateDevice_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateEvent: return ((const struct vkCreateEvent_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateFence: return ((const struct vkCreateFence_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateFramebuffer: return ((const struct vkCreateFramebuffer_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateGpaSessionAMD: return ((const struct vkCreateGpaSessionAMD_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateGraphicsPipelines: return ((const struct vkCreateGraphicsPipelines_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateImage: return ((const struct vkCreateImage_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateImageView: return ((const struct vkCreateImageView_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateIndirectCommandsLayoutEXT: return ((const struct vkCreateIndirectCommandsLayoutEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateIndirectCommandsLayoutNV: return ((const struct vkCreateIndirectCommandsLayoutNV_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateIndirectExecutionSetEXT: return ((const struct vkCreateIndirectExecutionSetEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateInstance: return ((const struct vkCreateInstance_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateMicromapEXT: return ((const struct vkCreateMicromapEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateOpticalFlowSessionNV: return ((const struct vkCreateOpticalFlowSessionNV_params *)args)->pAllocator!=NULL;
++ case unix_vkCreatePipelineBinariesKHR: return ((const struct vkCreatePipelineBinariesKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreatePipelineCache: return ((const struct vkCreatePipelineCache_params *)args)->pAllocator!=NULL;
++ case unix_vkCreatePipelineLayout: return ((const struct vkCreatePipelineLayout_params *)args)->pAllocator!=NULL;
++ case unix_vkCreatePrivateDataSlot: return ((const struct vkCreatePrivateDataSlot_params *)args)->pAllocator!=NULL;
++ case unix_vkCreatePrivateDataSlotEXT: return ((const struct vkCreatePrivateDataSlotEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateQueryPool: return ((const struct vkCreateQueryPool_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateRayTracingPipelinesKHR: return ((const struct vkCreateRayTracingPipelinesKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateRayTracingPipelinesNV: return ((const struct vkCreateRayTracingPipelinesNV_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateRenderPass: return ((const struct vkCreateRenderPass_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateRenderPass2: return ((const struct vkCreateRenderPass2_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateRenderPass2KHR: return ((const struct vkCreateRenderPass2KHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateSampler: return ((const struct vkCreateSampler_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateSamplerYcbcrConversion: return ((const struct vkCreateSamplerYcbcrConversion_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateSamplerYcbcrConversionKHR: return ((const struct vkCreateSamplerYcbcrConversionKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateSemaphore: return ((const struct vkCreateSemaphore_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateShaderInstrumentationARM: return ((const struct vkCreateShaderInstrumentationARM_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateShaderModule: return ((const struct vkCreateShaderModule_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateShadersEXT: return ((const struct vkCreateShadersEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateSwapchainKHR: return ((const struct vkCreateSwapchainKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateTensorARM: return ((const struct vkCreateTensorARM_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateTensorViewARM: return ((const struct vkCreateTensorViewARM_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateValidationCacheEXT: return ((const struct vkCreateValidationCacheEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateVideoSessionKHR: return ((const struct vkCreateVideoSessionKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateVideoSessionParametersKHR: return ((const struct vkCreateVideoSessionParametersKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkCreateWin32SurfaceKHR: return ((const struct vkCreateWin32SurfaceKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyAccelerationStructureKHR: return ((const struct vkDestroyAccelerationStructureKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyAccelerationStructureNV: return ((const struct vkDestroyAccelerationStructureNV_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyBuffer: return ((const struct vkDestroyBuffer_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyBufferView: return ((const struct vkDestroyBufferView_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyCommandPool: return ((const struct vkDestroyCommandPool_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyCuFunctionNVX: return ((const struct vkDestroyCuFunctionNVX_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyCuModuleNVX: return ((const struct vkDestroyCuModuleNVX_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDataGraphPipelineSessionARM: return ((const struct vkDestroyDataGraphPipelineSessionARM_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDebugReportCallbackEXT: return ((const struct vkDestroyDebugReportCallbackEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDebugUtilsMessengerEXT: return ((const struct vkDestroyDebugUtilsMessengerEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDeferredOperationKHR: return ((const struct vkDestroyDeferredOperationKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDescriptorPool: return ((const struct vkDestroyDescriptorPool_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDescriptorSetLayout: return ((const struct vkDestroyDescriptorSetLayout_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDescriptorUpdateTemplate: return ((const struct vkDestroyDescriptorUpdateTemplate_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDescriptorUpdateTemplateKHR: return ((const struct vkDestroyDescriptorUpdateTemplateKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyDevice: return ((const struct vkDestroyDevice_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyEvent: return ((const struct vkDestroyEvent_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyFence: return ((const struct vkDestroyFence_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyFramebuffer: return ((const struct vkDestroyFramebuffer_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyGpaSessionAMD: return ((const struct vkDestroyGpaSessionAMD_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyImage: return ((const struct vkDestroyImage_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyImageView: return ((const struct vkDestroyImageView_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyIndirectCommandsLayoutEXT: return ((const struct vkDestroyIndirectCommandsLayoutEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyIndirectCommandsLayoutNV: return ((const struct vkDestroyIndirectCommandsLayoutNV_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyIndirectExecutionSetEXT: return ((const struct vkDestroyIndirectExecutionSetEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyInstance: return ((const struct vkDestroyInstance_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyMicromapEXT: return ((const struct vkDestroyMicromapEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyOpticalFlowSessionNV: return ((const struct vkDestroyOpticalFlowSessionNV_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyPipeline: return ((const struct vkDestroyPipeline_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyPipelineBinaryKHR: return ((const struct vkDestroyPipelineBinaryKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyPipelineCache: return ((const struct vkDestroyPipelineCache_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyPipelineLayout: return ((const struct vkDestroyPipelineLayout_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyPrivateDataSlot: return ((const struct vkDestroyPrivateDataSlot_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyPrivateDataSlotEXT: return ((const struct vkDestroyPrivateDataSlotEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyQueryPool: return ((const struct vkDestroyQueryPool_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyRenderPass: return ((const struct vkDestroyRenderPass_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroySampler: return ((const struct vkDestroySampler_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroySamplerYcbcrConversion: return ((const struct vkDestroySamplerYcbcrConversion_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroySamplerYcbcrConversionKHR: return ((const struct vkDestroySamplerYcbcrConversionKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroySemaphore: return ((const struct vkDestroySemaphore_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyShaderEXT: return ((const struct vkDestroyShaderEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyShaderInstrumentationARM: return ((const struct vkDestroyShaderInstrumentationARM_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyShaderModule: return ((const struct vkDestroyShaderModule_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroySurfaceKHR: return ((const struct vkDestroySurfaceKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroySwapchainKHR: return ((const struct vkDestroySwapchainKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyTensorARM: return ((const struct vkDestroyTensorARM_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyTensorViewARM: return ((const struct vkDestroyTensorViewARM_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyValidationCacheEXT: return ((const struct vkDestroyValidationCacheEXT_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyVideoSessionKHR: return ((const struct vkDestroyVideoSessionKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkDestroyVideoSessionParametersKHR: return ((const struct vkDestroyVideoSessionParametersKHR_params *)args)->pAllocator!=NULL;
++ case unix_vkFreeMemory: return ((const struct vkFreeMemory_params *)args)->pAllocator!=NULL;
++ case unix_vkReleaseCapturedPipelineDataKHR: return ((const struct vkReleaseCapturedPipelineDataKHR_params *)args)->pAllocator!=NULL;
++ default:return FALSE;
++ }
++}
++
++static INIT_ONCE vk64_once=INIT_ONCE_STATIC_INIT;
++static BOOL vk64_enabled;
++static LONG vk64_ready;
++static BOOL CALLBACK vk64_init(INIT_ONCE *o,void *p,void **c)
++{
++ char value[2];(void)o;(void)p;(void)c;
++ vk64_enabled=GetEnvironmentVariableA("PW_VK_BATCH64",value,sizeof(value))==1 && value[0]=='1';
++ return TRUE;
++}
++static BOOL vk64_command(unsigned code)
++{
++ switch(code) {
++ case unix_vkCmdBeginConditionalRendering2EXT:
++ case unix_vkCmdBeginConditionalRenderingEXT:
++ case unix_vkCmdBeginCustomResolveEXT:
++ case unix_vkCmdBeginDebugUtilsLabelEXT:
++ case unix_vkCmdBeginGpaSampleAMD:
++ case unix_vkCmdBeginGpaSessionAMD:
++ case unix_vkCmdBeginPerTileExecutionQCOM:
++ case unix_vkCmdBeginQuery:
++ case unix_vkCmdBeginQueryIndexedEXT:
++ case unix_vkCmdBeginRenderPass:
++ case unix_vkCmdBeginRenderPass2:
++ case unix_vkCmdBeginRenderPass2KHR:
++ case unix_vkCmdBeginRendering:
++ case unix_vkCmdBeginRenderingKHR:
++ case unix_vkCmdBeginShaderInstrumentationARM:
++ case unix_vkCmdBeginTransformFeedback2EXT:
++ case unix_vkCmdBeginTransformFeedbackEXT:
++ case unix_vkCmdBeginVideoCodingKHR:
++ case unix_vkCmdBindDescriptorBufferEmbeddedSamplers2EXT:
++ case unix_vkCmdBindDescriptorBufferEmbeddedSamplersEXT:
++ case unix_vkCmdBindDescriptorBuffersEXT:
++ case unix_vkCmdBindDescriptorSets:
++ case unix_vkCmdBindDescriptorSets2:
++ case unix_vkCmdBindDescriptorSets2KHR:
++ case unix_vkCmdBindIndexBuffer:
++ case unix_vkCmdBindIndexBuffer2:
++ case unix_vkCmdBindIndexBuffer2KHR:
++ case unix_vkCmdBindIndexBuffer3KHR:
++ case unix_vkCmdBindInvocationMaskHUAWEI:
++ case unix_vkCmdBindPipeline:
++ case unix_vkCmdBindPipelineShaderGroupNV:
++ case unix_vkCmdBindResourceHeapEXT:
++ case unix_vkCmdBindSamplerHeapEXT:
++ case unix_vkCmdBindShadersEXT:
++ case unix_vkCmdBindShadingRateImageNV:
++ case unix_vkCmdBindTileMemoryQCOM:
++ case unix_vkCmdBindTransformFeedbackBuffers2EXT:
++ case unix_vkCmdBindTransformFeedbackBuffersEXT:
++ case unix_vkCmdBindVertexBuffers:
++ case unix_vkCmdBindVertexBuffers2:
++ case unix_vkCmdBindVertexBuffers2EXT:
++ case unix_vkCmdBindVertexBuffers3KHR:
++ case unix_vkCmdBlitImage:
++ case unix_vkCmdBlitImage2:
++ case unix_vkCmdBlitImage2KHR:
++ case unix_vkCmdBuildAccelerationStructureNV:
++ case unix_vkCmdBuildAccelerationStructuresIndirectKHR:
++ case unix_vkCmdBuildAccelerationStructuresKHR:
++ case unix_vkCmdBuildClusterAccelerationStructureIndirectNV:
++ case unix_vkCmdBuildMicromapsEXT:
++ case unix_vkCmdBuildPartitionedAccelerationStructuresNV:
++ case unix_vkCmdClearAttachments:
++ case unix_vkCmdClearColorImage:
++ case unix_vkCmdClearDepthStencilImage:
++ case unix_vkCmdControlVideoCodingKHR:
++ case unix_vkCmdConvertCooperativeVectorMatrixNV:
++ case unix_vkCmdCopyAccelerationStructureKHR:
++ case unix_vkCmdCopyAccelerationStructureNV:
++ case unix_vkCmdCopyAccelerationStructureToMemoryKHR:
++ case unix_vkCmdCopyBuffer:
++ case unix_vkCmdCopyBuffer2:
++ case unix_vkCmdCopyBuffer2KHR:
++ case unix_vkCmdCopyBufferToImage:
++ case unix_vkCmdCopyBufferToImage2:
++ case unix_vkCmdCopyBufferToImage2KHR:
++ case unix_vkCmdCopyGpaSessionResultsAMD:
++ case unix_vkCmdCopyImage:
++ case unix_vkCmdCopyImage2:
++ case unix_vkCmdCopyImage2KHR:
++ case unix_vkCmdCopyImageToBuffer:
++ case unix_vkCmdCopyImageToBuffer2:
++ case unix_vkCmdCopyImageToBuffer2KHR:
++ case unix_vkCmdCopyImageToMemoryKHR:
++ case unix_vkCmdCopyMemoryIndirectKHR:
++ case unix_vkCmdCopyMemoryIndirectNV:
++ case unix_vkCmdCopyMemoryKHR:
++ case unix_vkCmdCopyMemoryToAccelerationStructureKHR:
++ case unix_vkCmdCopyMemoryToImageIndirectKHR:
++ case unix_vkCmdCopyMemoryToImageIndirectNV:
++ case unix_vkCmdCopyMemoryToImageKHR:
++ case unix_vkCmdCopyMemoryToMicromapEXT:
++ case unix_vkCmdCopyMicromapEXT:
++ case unix_vkCmdCopyMicromapToMemoryEXT:
++ case unix_vkCmdCopyQueryPoolResults:
++ case unix_vkCmdCopyQueryPoolResultsToMemoryKHR:
++ case unix_vkCmdCopyTensorARM:
++ case unix_vkCmdCuLaunchKernelNVX:
++ case unix_vkCmdDebugMarkerBeginEXT:
++ case unix_vkCmdDebugMarkerEndEXT:
++ case unix_vkCmdDebugMarkerInsertEXT:
++ case unix_vkCmdDecodeVideoKHR:
++ case unix_vkCmdDecompressMemoryEXT:
++ case unix_vkCmdDecompressMemoryIndirectCountEXT:
++ case unix_vkCmdDecompressMemoryIndirectCountNV:
++ case unix_vkCmdDecompressMemoryNV:
++ case unix_vkCmdDispatch:
++ case unix_vkCmdDispatchBase:
++ case unix_vkCmdDispatchBaseKHR:
++ case unix_vkCmdDispatchDataGraphARM:
++ case unix_vkCmdDispatchIndirect:
++ case unix_vkCmdDispatchIndirect2KHR:
++ case unix_vkCmdDispatchTileQCOM:
++ case unix_vkCmdDraw:
++ case unix_vkCmdDrawClusterHUAWEI:
++ case unix_vkCmdDrawClusterIndirectHUAWEI:
++ case unix_vkCmdDrawIndexed:
++ case unix_vkCmdDrawIndexedIndirect:
++ case unix_vkCmdDrawIndexedIndirect2KHR:
++ case unix_vkCmdDrawIndexedIndirectCount:
++ case unix_vkCmdDrawIndexedIndirectCount2KHR:
++ case unix_vkCmdDrawIndexedIndirectCountAMD:
++ case unix_vkCmdDrawIndexedIndirectCountKHR:
++ case unix_vkCmdDrawIndirect:
++ case unix_vkCmdDrawIndirect2KHR:
++ case unix_vkCmdDrawIndirectByteCount2EXT:
++ case unix_vkCmdDrawIndirectByteCountEXT:
++ case unix_vkCmdDrawIndirectCount:
++ case unix_vkCmdDrawIndirectCount2KHR:
++ case unix_vkCmdDrawIndirectCountAMD:
++ case unix_vkCmdDrawIndirectCountKHR:
++ case unix_vkCmdDrawMeshTasksEXT:
++ case unix_vkCmdDrawMeshTasksIndirect2EXT:
++ case unix_vkCmdDrawMeshTasksIndirectCount2EXT:
++ case unix_vkCmdDrawMeshTasksIndirectCountEXT:
++ case unix_vkCmdDrawMeshTasksIndirectCountNV:
++ case unix_vkCmdDrawMeshTasksIndirectEXT:
++ case unix_vkCmdDrawMeshTasksIndirectNV:
++ case unix_vkCmdDrawMeshTasksNV:
++ case unix_vkCmdDrawMultiEXT:
++ case unix_vkCmdDrawMultiIndexedEXT:
++ case unix_vkCmdEncodeVideoKHR:
++ case unix_vkCmdEndConditionalRenderingEXT:
++ case unix_vkCmdEndDebugUtilsLabelEXT:
++ case unix_vkCmdEndGpaSampleAMD:
++ case unix_vkCmdEndGpaSessionAMD:
++ case unix_vkCmdEndPerTileExecutionQCOM:
++ case unix_vkCmdEndQuery:
++ case unix_vkCmdEndQueryIndexedEXT:
++ case unix_vkCmdEndRenderPass:
++ case unix_vkCmdEndRenderPass2:
++ case unix_vkCmdEndRenderPass2KHR:
++ case unix_vkCmdEndRendering:
++ case unix_vkCmdEndRendering2EXT:
++ case unix_vkCmdEndRendering2KHR:
++ case unix_vkCmdEndRenderingKHR:
++ case unix_vkCmdEndShaderInstrumentationARM:
++ case unix_vkCmdEndTransformFeedback2EXT:
++ case unix_vkCmdEndTransformFeedbackEXT:
++ case unix_vkCmdEndVideoCodingKHR:
++ case unix_vkCmdExecuteCommands:
++ case unix_vkCmdExecuteGeneratedCommandsEXT:
++ case unix_vkCmdExecuteGeneratedCommandsNV:
++ case unix_vkCmdFillBuffer:
++ case unix_vkCmdFillMemoryKHR:
++ case unix_vkCmdInsertDebugUtilsLabelEXT:
++ case unix_vkCmdNextSubpass:
++ case unix_vkCmdNextSubpass2:
++ case unix_vkCmdNextSubpass2KHR:
++ case unix_vkCmdOpticalFlowExecuteNV:
++ case unix_vkCmdPipelineBarrier:
++ case unix_vkCmdPipelineBarrier2:
++ case unix_vkCmdPipelineBarrier2KHR:
++ case unix_vkCmdPreprocessGeneratedCommandsEXT:
++ case unix_vkCmdPreprocessGeneratedCommandsNV:
++ case unix_vkCmdPushConstants:
++ case unix_vkCmdPushConstants2:
++ case unix_vkCmdPushConstants2KHR:
++ case unix_vkCmdPushDataEXT:
++ case unix_vkCmdPushDescriptorSet:
++ case unix_vkCmdPushDescriptorSet2:
++ case unix_vkCmdPushDescriptorSet2KHR:
++ case unix_vkCmdPushDescriptorSetKHR:
++ case unix_vkCmdPushDescriptorSetWithTemplate:
++ case unix_vkCmdPushDescriptorSetWithTemplate2:
++ case unix_vkCmdPushDescriptorSetWithTemplate2KHR:
++ case unix_vkCmdPushDescriptorSetWithTemplateKHR:
++ case unix_vkCmdResetEvent:
++ case unix_vkCmdResetEvent2:
++ case unix_vkCmdResetEvent2KHR:
++ case unix_vkCmdResetQueryPool:
++ case unix_vkCmdResolveImage:
++ case unix_vkCmdResolveImage2:
++ case unix_vkCmdResolveImage2KHR:
++ case unix_vkCmdSetAlphaToCoverageEnableEXT:
++ case unix_vkCmdSetAlphaToOneEnableEXT:
++ case unix_vkCmdSetAttachmentFeedbackLoopEnableEXT:
++ case unix_vkCmdSetBlendConstants:
++ case unix_vkCmdSetCheckpointNV:
++ case unix_vkCmdSetCoarseSampleOrderNV:
++ case unix_vkCmdSetColorBlendAdvancedEXT:
++ case unix_vkCmdSetColorBlendEnableEXT:
++ case unix_vkCmdSetColorBlendEquationEXT:
++ case unix_vkCmdSetColorWriteEnableEXT:
++ case unix_vkCmdSetColorWriteMaskEXT:
++ case unix_vkCmdSetComputeOccupancyPriorityNV:
++ case unix_vkCmdSetConservativeRasterizationModeEXT:
++ case unix_vkCmdSetCoverageModulationModeNV:
++ case unix_vkCmdSetCoverageModulationTableEnableNV:
++ case unix_vkCmdSetCoverageModulationTableNV:
++ case unix_vkCmdSetCoverageReductionModeNV:
++ case unix_vkCmdSetCoverageToColorEnableNV:
++ case unix_vkCmdSetCoverageToColorLocationNV:
++ case unix_vkCmdSetCullMode:
++ case unix_vkCmdSetCullModeEXT:
++ case unix_vkCmdSetDepthBias:
++ case unix_vkCmdSetDepthBias2EXT:
++ case unix_vkCmdSetDepthBiasEnable:
++ case unix_vkCmdSetDepthBiasEnableEXT:
++ case unix_vkCmdSetDepthBounds:
++ case unix_vkCmdSetDepthBoundsTestEnable:
++ case unix_vkCmdSetDepthBoundsTestEnableEXT:
++ case unix_vkCmdSetDepthClampEnableEXT:
++ case unix_vkCmdSetDepthClampRangeEXT:
++ case unix_vkCmdSetDepthClipEnableEXT:
++ case unix_vkCmdSetDepthClipNegativeOneToOneEXT:
++ case unix_vkCmdSetDepthCompareOp:
++ case unix_vkCmdSetDepthCompareOpEXT:
++ case unix_vkCmdSetDepthTestEnable:
++ case unix_vkCmdSetDepthTestEnableEXT:
++ case unix_vkCmdSetDepthWriteEnable:
++ case unix_vkCmdSetDepthWriteEnableEXT:
++ case unix_vkCmdSetDescriptorBufferOffsets2EXT:
++ case unix_vkCmdSetDescriptorBufferOffsetsEXT:
++ case unix_vkCmdSetDeviceMask:
++ case unix_vkCmdSetDeviceMaskKHR:
++ case unix_vkCmdSetDiscardRectangleEXT:
++ case unix_vkCmdSetDiscardRectangleEnableEXT:
++ case unix_vkCmdSetDiscardRectangleModeEXT:
++ case unix_vkCmdSetDispatchParametersARM:
++ case unix_vkCmdSetEvent:
++ case unix_vkCmdSetEvent2:
++ case unix_vkCmdSetEvent2KHR:
++ case unix_vkCmdSetExclusiveScissorEnableNV:
++ case unix_vkCmdSetExclusiveScissorNV:
++ case unix_vkCmdSetExtraPrimitiveOverestimationSizeEXT:
++ case unix_vkCmdSetFragmentShadingRateEnumNV:
++ case unix_vkCmdSetFragmentShadingRateKHR:
++ case unix_vkCmdSetFrontFace:
++ case unix_vkCmdSetFrontFaceEXT:
++ case unix_vkCmdSetLineRasterizationModeEXT:
++ case unix_vkCmdSetLineStipple:
++ case unix_vkCmdSetLineStippleEXT:
++ case unix_vkCmdSetLineStippleEnableEXT:
++ case unix_vkCmdSetLineStippleKHR:
++ case unix_vkCmdSetLineWidth:
++ case unix_vkCmdSetLogicOpEXT:
++ case unix_vkCmdSetLogicOpEnableEXT:
++ case unix_vkCmdSetPatchControlPointsEXT:
++ case unix_vkCmdSetPerformanceMarkerINTEL:
++ case unix_vkCmdSetPerformanceOverrideINTEL:
++ case unix_vkCmdSetPerformanceStreamMarkerINTEL:
++ case unix_vkCmdSetPolygonModeEXT:
++ case unix_vkCmdSetPrimitiveRestartEnable:
++ case unix_vkCmdSetPrimitiveRestartEnableEXT:
++ case unix_vkCmdSetPrimitiveRestartIndexEXT:
++ case unix_vkCmdSetPrimitiveTopology:
++ case unix_vkCmdSetPrimitiveTopologyEXT:
++ case unix_vkCmdSetProvokingVertexModeEXT:
++ case unix_vkCmdSetRasterizationSamplesEXT:
++ case unix_vkCmdSetRasterizationStreamEXT:
++ case unix_vkCmdSetRasterizerDiscardEnable:
++ case unix_vkCmdSetRasterizerDiscardEnableEXT:
++ case unix_vkCmdSetRayTracingPipelineStackSizeKHR:
++ case unix_vkCmdSetRenderingAttachmentLocations:
++ case unix_vkCmdSetRenderingAttachmentLocationsKHR:
++ case unix_vkCmdSetRenderingInputAttachmentIndices:
++ case unix_vkCmdSetRenderingInputAttachmentIndicesKHR:
++ case unix_vkCmdSetRepresentativeFragmentTestEnableNV:
++ case unix_vkCmdSetSampleLocationsEXT:
++ case unix_vkCmdSetSampleLocationsEnableEXT:
++ case unix_vkCmdSetSampleMaskEXT:
++ case unix_vkCmdSetScissor:
++ case unix_vkCmdSetScissorWithCount:
++ case unix_vkCmdSetScissorWithCountEXT:
++ case unix_vkCmdSetShadingRateImageEnableNV:
++ case unix_vkCmdSetStencilCompareMask:
++ case unix_vkCmdSetStencilOp:
++ case unix_vkCmdSetStencilOpEXT:
++ case unix_vkCmdSetStencilReference:
++ case unix_vkCmdSetStencilTestEnable:
++ case unix_vkCmdSetStencilTestEnableEXT:
++ case unix_vkCmdSetStencilWriteMask:
++ case unix_vkCmdSetTessellationDomainOriginEXT:
++ case unix_vkCmdSetVertexInputEXT:
++ case unix_vkCmdSetViewport:
++ case unix_vkCmdSetViewportShadingRatePaletteNV:
++ case unix_vkCmdSetViewportSwizzleNV:
++ case unix_vkCmdSetViewportWScalingEnableNV:
++ case unix_vkCmdSetViewportWScalingNV:
++ case unix_vkCmdSetViewportWithCount:
++ case unix_vkCmdSetViewportWithCountEXT:
++ case unix_vkCmdSubpassShadingHUAWEI:
++ case unix_vkCmdTraceRaysIndirect2KHR:
++ case unix_vkCmdTraceRaysIndirectKHR:
++ case unix_vkCmdTraceRaysKHR:
++ case unix_vkCmdTraceRaysNV:
++ case unix_vkCmdUpdateBuffer:
++ case unix_vkCmdUpdateMemoryKHR:
++ case unix_vkCmdUpdatePipelineIndirectBufferNV:
++ case unix_vkCmdWaitEvents:
++ case unix_vkCmdWaitEvents2:
++ case unix_vkCmdWaitEvents2KHR:
++ case unix_vkCmdWriteAccelerationStructuresPropertiesKHR:
++ case unix_vkCmdWriteAccelerationStructuresPropertiesNV:
++ case unix_vkCmdWriteBufferMarker2AMD:
++ case unix_vkCmdWriteBufferMarkerAMD:
++ case unix_vkCmdWriteMarkerToMemoryAMD:
++ case unix_vkCmdWriteMicromapsPropertiesEXT:
++ case unix_vkCmdWriteTimestamp:
++ case unix_vkCmdWriteTimestamp2:
++ case unix_vkCmdWriteTimestamp2KHR:
++  return TRUE;
++ default:return FALSE;
++ }
++}
++static NTSTATUS vk64_flush_locked(struct pw_vk64_stream *s)
++{
++ struct pw_vk64_packet p;NTSTATUS status;
++ if(!s || !s->used)return STATUS_SUCCESS;
++ p.version=PW_VK64_VERSION;p.bytes=s->used;p.data=(UINT_PTR)s->storage;
++ status=WINE_UNIX_CALL(unix_pw_vk_batch,&p);
++ if(!status)s->used=0;
++ return status;
++}
++static NTSTATUS vk64_flush(VkCommandBuffer cb)
++{
++ struct pw_vk64_stream *s=cb?cb->pw_batch64:NULL;NTSTATUS status;
++ if(!s)return STATUS_SUCCESS;
++ AcquireSRWLockExclusive(&s->lock);status=vk64_flush_locked(s);ReleaseSRWLockExclusive(&s->lock);
++ return status;
++}
++static NTSTATUS vk64_flush_all(void)
++{
++ struct pw_vk64_stream *s;NTSTATUS status=STATUS_SUCCESS;
++ /* No waits/submits or application callbacks under these locks. Registered
++  * streams cannot disappear while the finite synchronous replays run. */
++ AcquireSRWLockExclusive(&vk64_registry_lock);
++ for(s=vk64_streams;s;s=s->next) {
++  AcquireSRWLockExclusive(&s->lock);status=vk64_flush_locked(s);ReleaseSRWLockExclusive(&s->lock);
++  if(status)break;
++ }
++ ReleaseSRWLockExclusive(&vk64_registry_lock);return status;
++}
++void pw_vk64_discard(VkCommandBuffer cb,BOOL release)
++{
++ struct pw_vk64_stream *s=cb?cb->pw_batch64:NULL,**link;
++ if(!s)return;
++ if(release)AcquireSRWLockExclusive(&vk64_registry_lock);
++ AcquireSRWLockExclusive(&s->lock);s->used=0;ReleaseSRWLockExclusive(&s->lock);
++ if(release){
++  for(link=&vk64_streams;*link && *link!=s;link=&(*link)->next){}
++  if(*link)*link=s->next;
++  cb->pw_batch64=NULL;ReleaseSRWLockExclusive(&vk64_registry_lock);free(s);
++ }
++}
++NTSTATUS pw_vk64_call(unsigned code,void *args)
++{
++ NTSTATUS status;VkCommandBuffer cb;
++ InitOnceExecuteOnce(&vk64_once,vk64_init,NULL,NULL);
++ if(vk64_enabled && InterlockedCompareExchange(&vk64_ready,0,0)) {
++  if(vk64_command(code)) {
++   struct pw_vk64_stream *s;size_t bytes=pw_vk64_size(code,args);
++   cb=*(VkCommandBuffer *)args;
++   if(bytes && cb) {
++    s=cb->pw_batch64;
++    if(!s){
++     s=calloc(1,sizeof(*s));
++     if(s){
++      AcquireSRWLockExclusive(&vk64_registry_lock);s->next=vk64_streams;vk64_streams=s;
++      cb->pw_batch64=s;ReleaseSRWLockExclusive(&vk64_registry_lock);
++     }
++    }
++    if(s) {
++     struct pw_vk64_record *r;
++     AcquireSRWLockExclusive(&s->lock);
++     if(!InterlockedCompareExchange(&vk64_ready,0,0)) {
++      ReleaseSRWLockExclusive(&s->lock);
++      return pw_vk_present_call(code,args);
++     }
++     if(sizeof(*r)+bytes>sizeof(s->storage)-s->used) {
++      if((status=vk64_flush_locked(s))){ReleaseSRWLockExclusive(&s->lock);return status;}
++     }
++     r=(struct pw_vk64_record *)((char *)s->storage+s->used);
++     if(pw_vk64_encode(code,args,r+1,sizeof(s->storage)-s->used-sizeof(*r))) {
++      r->code=code;r->bytes=bytes;s->used+=sizeof(*r)+bytes;
++      ReleaseSRWLockExclusive(&s->lock);
++      return STATUS_SUCCESS;
++     }
++     ReleaseSRWLockExclusive(&s->lock);
++    }
++   }
++   if((status=vk64_flush(cb)))return status;
++  } else if(code==unix_vkEndCommandBuffer) {
++   if((status=vk64_flush(*(VkCommandBuffer *)args)))return status;
++  } else if(code==unix_vkBeginCommandBuffer || code==unix_vkResetCommandBuffer) {
++   pw_vk64_discard(*(VkCommandBuffer *)args,FALSE);
++  } else if(code==unix_vkResetCommandPool) {
++   const struct vkResetCommandPool_params *q=args;
++   struct vk_command_pool *pool=command_pool_from_handle(q->commandPool);
++   LIST_FOR_EACH_ENTRY(cb,&pool->command_buffers,struct VkCommandBuffer_T,pool_link)
++    pw_vk64_discard(cb,FALSE);
++  } else {
++   /* Includes resource destruction and updates: queued commands must take
++    * effect before an object can be destroyed, rebound or reused. */
++   if((status=vk64_flush_all()))return status;
++  }
++  if(vk64_allocator(code,args) || code==unix_vkCreateDebugUtilsMessengerEXT || code==unix_vkCreateDebugReportCallbackEXT) {
++   InterlockedExchange(&vk64_disabled,1);InterlockedExchange(&vk64_ready,0);
++   if((status=vk64_flush_all()))return status;
++  }
++ }
++ if(code==unix_vkCreateInstance) {
++  const struct vkCreateInstance_params *q=args;
++  const VkBaseInStructure *next=q->pCreateInfo?q->pCreateInfo->pNext:NULL;
++  if(q->pAllocator || (q->pCreateInfo && q->pCreateInfo->enabledLayerCount))InterlockedExchange(&vk64_disabled,1);
++  for(;next;next=next->pNext)
++   if(next->sType==VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT || next->sType==VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT)
++    InterlockedExchange(&vk64_disabled,1);
++ }
++ status=pw_vk_present_call(code,args);
++ if(vk64_enabled && !InterlockedCompareExchange(&vk64_disabled,0,0) && code==unix_vkCreateInstance && !status) {
++  struct vkCreateInstance_params *q=args;
++  if(q->result==VK_SUCCESS && q->pInstance && *q->pInstance) {
++   struct is_available_instance_function_params cap={*q->pInstance,PW_VK64_NAME};
++   if(WINE_UNIX_CALL(unix_is_available_instance_function,&cap)==PW_VK64_CAPABILITY) {
++    InterlockedExchange(&vk64_ready,1);
++    if(InterlockedCompareExchange(&vk64_disabled,0,0))InterlockedExchange(&vk64_ready,0);
++    WINE_MESSAGE("PW_VK_BATCH64 version=1 enabled=1 scope=command-buffer synchronous-flush=1\n");
++   } else WINE_MESSAGE("PW_VK_BATCH64 version=1 enabled=0 reason=backend-unavailable\n");
++  }
++ }
++ return status;
++}
++#endif
+--- a/dlls/winevulkan/pw_vk_batch_unix.c
++++ b/dlls/winevulkan/pw_vk_batch_unix.c
+@@ -75,9 +75,35 @@
+  if(!generated_record(ctx,r,&params))return 1;
+  memcpy(&code,r->payload,4);return pw_vk_batch_dispatch_native(code,params)!=STATUS_SUCCESS;
+ }
++
++#include "pw_vk64.h"
++static NTSTATUS pw_vk64_replay(void *args)
++{
++ const struct pw_vk64_packet *p=args;
++ const unsigned char *data=(const unsigned char *)(uintptr_t)p->data;
++ size_t at=0;
++ if(!data || !p->bytes || p->bytes>PW_VK64_MAX_BYTES || (p->bytes&7) || ((uintptr_t)data&7))
++  return STATUS_INVALID_PARAMETER;
++ /* Validate the entire bounded stream before issuing any driver command. */
++ while(at<p->bytes) {
++  const struct pw_vk64_record *r=(const void *)(data+at);
++  if(p->bytes-at<sizeof(*r) || r->bytes>p->bytes-at-sizeof(*r) || (r->bytes&7) ||
++     !pw_vk64_valid(r->code,r+1,r->bytes))return STATUS_INVALID_PARAMETER;
++  at+=sizeof(*r)+r->bytes;
++ }
++ for(at=0;at<p->bytes;) {
++  const struct pw_vk64_record *r=(const void *)(data+at);
++  NTSTATUS status=pw_vk_batch_dispatch_native(r->code,(void *)(r+1));
++  if(status)return status;
++  at+=sizeof(*r)+r->bytes;
++ }
++ return STATUS_SUCCESS;
++}
++
+ NTSTATUS pw_vk_batch_unix(void *args)
+ {
+  struct pw_vk_batch_params *p=args;size_t completed;struct replay_context ctx;NTSTATUS status=STATUS_SUCCESS;
++ if(p->version==PW_VK64_VERSION)return pw_vk64_replay(args);
+  if((p->version!=PW_VK_BATCH_VERSION&&p->version!=PW_VK_BATCH_LEGACY_VERSION)||p->bytes>PW_VK_BATCH_SCRATCH||p->code>unix_count||p->code==unix_pw_vk_batch)return STATUS_INVALID_PARAMETER;
+  ctx.version=p->version;ctx.arena=ctx.local;ctx.capacity=sizeof(ctx.local);ctx.failure=STATUS_SUCCESS;
+  if(pw_vk_stream_replay(UlongToPtr(p->batch),p->bytes,preflight,&ctx,&completed)!=PW_VK_STREAM_OK)status=ctx.failure?ctx.failure:STATUS_INVALID_PARAMETER;
+--- a/dlls/winevulkan/vulkan_loader.h
++++ b/dlls/winevulkan/vulkan_loader.h
+@@ -54,6 +54,9 @@
+     struct vulkan_client_object obj;
+     struct list pool_link;
+     VkDevice device;
++#ifdef _WIN64
++    void *pw_batch64;
++#endif
+ };
+ 
+ struct vulkan_func
+@@ -147,7 +150,9 @@
+ #include "pw_vk_batch.h"
+ #include "pw_vk_present_pe.h"
+ #ifdef _WIN64
+-#define UNIX_CALL(code, params) ((unix_ ## code == unix_vkQueuePresentKHR || unix_ ## code == unix_vkDestroyDevice) ? pw_vk_present_call(unix_ ## code, params) : WINE_UNIX_CALL(unix_ ## code, params))
++NTSTATUS pw_vk64_call(unsigned int,void *);
++void pw_vk64_discard(VkCommandBuffer,BOOL);
++#define UNIX_CALL(code, params) pw_vk64_call(unix_ ## code, params)
+ #else
+ #define UNIX_CALL(code, params) pw_vk_batch_call(unix_ ## code, params)
+ #endif
+--- a/dlls/winevulkan/vulkan.c
++++ b/dlls/winevulkan/vulkan.c
+@@ -976,6 +976,7 @@
+ static NTSTATUS is_available_instance_function(VkInstance handle, const char *name)
+ {
+     struct vulkan_instance *instance = vulkan_instance_from_handle(handle);
++    if (!strcmp(name, "__wine_pw_vk_batch64_v1")) return 0x50576401u;
+     if (!strcmp(name, PW_VK_BATCH_NAME)) return PW_VK_BATCH_CAPABILITY;
+     if (!strcmp(name, PW_VK_BATCH_LEGACY_NAME)) return PW_VK_BATCH_LEGACY_CAPABILITY;
+     return !!vk_funcs->p_vkGetInstanceProcAddr(instance->host.instance, name);
+--- a/dlls/winevulkan/loader.c
++++ b/dlls/winevulkan/loader.c
+@@ -764,6 +764,9 @@
+     struct vkFreeCommandBuffers_params params;
+     uint32_t i;
+ 
++#ifdef _WIN64
++    for (i = 0; i < count; i++) pw_vk64_discard(buffers[i],TRUE);
++#endif
+     params.device = device;
+     params.commandPool = cmd_pool;
+     params.commandBufferCount = count;
