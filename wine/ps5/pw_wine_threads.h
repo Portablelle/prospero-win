@@ -21,5 +21,10 @@ int pw_wine_thread_kill(pid_t pid,long tid,int signal);
 /* pthread_setschedparam on a registered thread: 0, or an errno value (ESRCH
  * for an unknown id, or what the system refused). */
 int pw_wine_thread_set_priority(long tid,int policy,int priority);
+/* PW_WINE_TUNE's rule for a thread (pw_wine_tune.h): its description, as
+ * UTF-16 code units (none for an unnamed thread), picks a CPU mask and an
+ * optional SCHED_FIFO priority, applied to the registered thread. 0 when
+ * applied or when no rule applies; otherwise an errno value. */
+int pw_wine_thread_tune(long tid,const unsigned short *name,size_t length);
 
 #endif

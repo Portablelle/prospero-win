@@ -47,6 +47,13 @@ typedef struct PwWineDmemOps {
     int (*unmap)(void *context, uintptr_t address, size_t bytes);
     /* Give back direct memory, possibly a part of one allocation. */
     int (*release)(void *context, int64_t offset, size_t bytes);
+    /* Optional large pages: a commit that spans whole large_page-aligned
+     * pieces backs them with allocate_large and map_large, which align to
+     * large_page, so the kernel can map them with large pages; the ends use
+     * the ordinary calls. 0 and NULL leave every commit in pages. */
+    size_t large_page;
+    int (*allocate_large)(void *context, size_t bytes, int64_t *offset);
+    int (*map_large)(void *context, uintptr_t address, size_t bytes, int64_t offset);
 } PwWineDmemOps;
 
 /* Virtual pages mapped onto contiguous direct memory, or, with offset
@@ -64,6 +71,8 @@ typedef struct PwWineDmemStats {
     uint64_t low_backed_bytes, peak_low_backed_bytes;
     uint64_t allocations, releases, maps, protects, failures;
     uint32_t runs, peak_runs;
+    /* Bytes backed through allocate_large and map_large so far. */
+    uint64_t large_bytes;
 } PwWineDmemStats;
 
 typedef struct PwWineDmem {

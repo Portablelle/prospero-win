@@ -130,14 +130,15 @@ static void add_run(PwWineDmem *d, PwWineDmemRun run)
 }
 
 /* Back a reserved range that no run touches, with one table entry free. */
-static int back(PwWineDmem *d, uintptr_t address, size_t bytes, unsigned protection)
+static int back_pages(PwWineDmem *d, uintptr_t address, size_t bytes, unsigned protection, int large)
 {
     const PwWineDmemOps *ops = &d->ops;
     int64_t offset;
 
-    if (ops->allocate(ops->context, bytes, &offset)) goto failed;
+    if ((large ? ops->allocate_large : ops->allocate)(ops->context, bytes, &offset)) goto failed;
     d->stats.allocations++;
-    if (ops->map(ops->context, address, bytes, offset)) goto release;
+    if ((large ? ops->map_large : ops->map)(ops->context, address, bytes, offset)) goto release;
+    if (large) d->stats.large_bytes += bytes;
     d->stats.maps++;
     if (d->zero_fill) memset((void *)address, 0, bytes);
     if (protection != READ_WRITE) {
@@ -157,6 +158,29 @@ release:
 failed:
     d->stats.failures++;
     return -1;
+}
+
+/* back_pages, with the large_page-aligned middle of the range in large pages
+ * when the ops have them and the table has room for the two ends. A middle
+ * the kernel refuses is backed in ordinary pages instead. */
+static int back(PwWineDmem *d, uintptr_t address, size_t bytes, unsigned protection)
+{
+    const size_t large = d->ops.large_page;
+    uintptr_t low, high;
+
+    if (!large || !d->ops.allocate_large || !d->ops.map_large || bytes < large ||
+        d->run_count + 3 > d->run_capacity)
+        return back_pages(d, address, bytes, protection, 0);
+    low = (address + large - 1) & ~(uintptr_t)(large - 1);
+    high = (address + bytes) & ~(uintptr_t)(large - 1);
+    if (low >= high) return back_pages(d, address, bytes, protection, 0);
+    if (low > address && back_pages(d, address, low - address, protection, 0)) return -1;
+    if (back_pages(d, low, high - low, protection, 1)) {
+        d->stats.failures--;  /* refused large pages are not a failure */
+        if (back_pages(d, low, high - low, protection, 0)) return -1;
+    }
+    if (high < address + bytes && back_pages(d, high, address + bytes - high, protection, 0)) return -1;
+    return 0;
 }
 
 int pw_wine_dmem_init(PwWineDmem *d, const PwWineDmemOps *ops, PwWineDmemRun *runs,

@@ -12,6 +12,7 @@
  * regions stay ordinary reservations and every call passes through. */
 #include "pw_wine_dmem.h"
 #include "pw_wine_heap.h"
+#include "pw_wine_tune.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,7 @@ extern int sceKernelAvailableDirectMemorySize(int64_t start, int64_t end, size_t
 
 enum {
     PAGE = 0x4000,
+    LARGE_PAGE = 0x200000,
     KERNEL_FIXED = 0x10,
     KERNEL_NO_OVERWRITE = 0x80,
     MEMORY_TYPE = 0x0c,       /* as ps5-xash3d's heap */
@@ -132,7 +134,37 @@ static int release(void *context, int64_t offset, size_t bytes)
     return rc;
 }
 
-static const PwWineDmemOps ops = { NULL, PAGE, reserve, allocate, map, protect, unmap, release };
+/* PW_WINE_TUNE dmem2m=1: 2 MiB-aligned direct memory mapped at 2 MiB, so
+ * the kernel can use large pages for big commits (fewer TLB misses on the
+ * game's data). */
+static int allocate_large(void *context, size_t bytes, int64_t *offset)
+{
+    uint64_t t0 = slow_start();
+    int rc;
+    (void)context;
+    rc = sceKernelAllocateMainDirectMemory(bytes, LARGE_PAGE, MEMORY_TYPE, offset) != 0;
+    slow_end(t0, "allocate-2m", bytes);
+    return rc;
+}
+static int map_large(void *context, uintptr_t address, size_t bytes, int64_t offset)
+{
+    void *at = (void *)address;
+    uint64_t t0 = slow_start();
+    int rc;
+    (void)context;
+    rc = sceKernelMapDirectMemory(&at, bytes, map_protection, KERNEL_FIXED, offset, LARGE_PAGE);
+    slow_end(t0, "map-2m", bytes);
+    {
+        static int logged_ok, logged_refused;
+        if (!rc && !logged_ok++)
+            fprintf(stderr, "PW_WINE_TUNE dmem2m first large map %p bytes=%zu\n", (void *)address, bytes);
+        if (rc && !logged_refused++)
+            fprintf(stderr, "PW_WINE_TUNE dmem2m large map refused rc=%d bytes=%zu: pages instead\n", rc, bytes);
+    }
+    return rc || at != (void *)address;
+}
+
+static PwWineDmemOps ops = { NULL, PAGE, reserve, allocate, map, protect, unmap, release, 0, NULL, NULL };
 static PwWineDmem dmem;
 static PwWineDmemRun runs[RUNS];
 /* 0 before the self-check, 1 in use, -1 refused: every call passes. */
@@ -310,6 +342,15 @@ static void heap_use_direct_memory(void)
  * Such a region is dropped again when it is unmapped. */
 void __wine_ps5_dmem_region(void *base, size_t size)
 {
+    if (!state) {
+        char value[8];
+        if (pw_wine_tune_get(getenv("PW_WINE_TUNE"), "dmem2m", value, sizeof(value)) && !strcmp(value, "1")) {
+            ops.large_page = LARGE_PAGE;
+            ops.allocate_large = allocate_large;
+            ops.map_large = map_large;
+            fprintf(stderr, "PW_WINE_TUNE dmem2m=1 large_page=%u\n", (unsigned)LARGE_PAGE);
+        }
+    }
     if (!state && pw_wine_dmem_init(&dmem, &ops, runs, RUNS, 1)) state = -1;
     if (state < 0) return;
     if (pw_wine_dmem_add_region(&dmem, (uintptr_t)base, size, 1)) {

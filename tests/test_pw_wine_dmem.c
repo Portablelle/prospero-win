@@ -134,6 +134,64 @@ static unsigned allocated_pages(void)
     return count;
 }
 /* The table, the model and the counters describe the same memory. */
+/* Large pages: a commit's large-aligned middle goes through allocate_large
+ * and map_large, its ends through the ordinary calls, and a refused large
+ * map falls back to pages without counting as a failure. */
+enum { LARGE = 4 * PAGE };
+static unsigned large_calls, refuse_large;
+static int model_allocate_large(void *context, size_t bytes, int64_t *offset)
+{
+    assert(!(bytes % LARGE));
+    large_calls++;
+    if (refuse_large) return -1;
+    return model_allocate(context, bytes, offset);
+}
+static int model_map_large(void *context, uintptr_t address, size_t bytes, int64_t offset)
+{
+    assert(!(address % LARGE) && !(bytes % LARGE));
+    return model_map(context, address, bytes, offset);
+}
+static void test_large_pages(void)
+{
+    static PwWineDmemRun big_runs[RUNS];
+    PwWineDmemOps large_ops = ops;
+    PwWineDmem big;
+    PwWineDmemStats stats;
+    unsigned p0 = 460;
+
+    while (at(p0) % LARGE) p0++;
+    large_ops.large_page = LARGE;
+    large_ops.allocate_large = model_allocate_large;
+    large_ops.map_large = model_map_large;
+    assert(pw_wine_dmem_init(&big, &large_ops, big_runs, RUNS, 1) == 0);
+    assert(pw_wine_dmem_add_region(&big, at(p0), 40 * PAGE, 0) == 0);
+    /* pages p0+1 .. p0+18: 3 + 12 (three large) + 3 */
+    assert(pw_wine_dmem_replace(&big, at(p0 + 1), 18 * PAGE, 3) == 0);
+    pw_wine_dmem_stats(&big, &stats);
+    assert(large_calls == 1 && stats.large_bytes == 12 * PAGE && stats.failures == 0);
+    assert(pw_wine_dmem_backed(&big, at(p0), 40 * PAGE) == 18 * PAGE);
+    for (size_t b = 0; b < 18 * PAGE; b++) assert(((uint8_t *)at(p0 + 1))[b] == 0);
+    memset((void *)at(p0 + 1), 0x3c, 18 * PAGE);
+    for (unsigned p = p0 + 1; p < p0 + 19; p++) assert(state[p] == MAPPED);
+    /* a decommit in the middle of a large piece releases just that page */
+    assert(pw_wine_dmem_replace(&big, at(p0 + 6), PAGE, 0) == 0 && state[p0 + 6] == RESERVED);
+    assert(pw_wine_dmem_backed(&big, at(p0), 40 * PAGE) == 17 * PAGE);
+    assert(pw_wine_dmem_replace(&big, at(p0), 40 * PAGE, 0) == 0);
+    assert(pw_wine_dmem_backed(&big, at(p0), 40 * PAGE) == 0);
+    /* too small for a large piece: pages only */
+    assert(pw_wine_dmem_replace(&big, at(p0 + 1), 6 * PAGE, 3) == 0 && large_calls == 1);
+    assert(pw_wine_dmem_replace(&big, at(p0), 40 * PAGE, 0) == 0);
+    /* refused: pages instead, not a failure */
+    refuse_large = 1;
+    assert(pw_wine_dmem_replace(&big, at(p0), 16 * PAGE, 3) == 0);
+    pw_wine_dmem_stats(&big, &stats);
+    assert(large_calls == 2 && stats.large_bytes == 12 * PAGE && stats.failures == 0);
+    assert(pw_wine_dmem_backed(&big, at(p0), 40 * PAGE) == 16 * PAGE);
+    assert(pw_wine_dmem_replace(&big, at(p0), 40 * PAGE, 0) == 0);
+    assert(pw_wine_dmem_remove_regions(&big, at(p0), 40 * PAGE) == 1);
+    model_unmap(NULL, at(p0), 40 * PAGE);
+}
+
 static void check_consistent(void)
 {
     unsigned mapped = 0, mapped_low = 0;
@@ -376,12 +434,13 @@ int main(void)
     test_merge_and_failures();
     test_random();
     test_remove_regions();
+    test_large_pages();
     pw_wine_dmem_stats(&dmem, &stats);
     /* memory was backed on both sides of 4 GiB */
     assert(!straddles ||
            (stats.peak_low_backed_bytes > 0 && stats.peak_low_backed_bytes < stats.peak_backed_bytes));
     printf("wine dmem passed: regions, commit, protect, replace, split and merged runs, "
-           "caller mappings, kernel failures, a full table, 20000 random operations, dropped regions and the "
+           "caller mappings, kernel failures, a full table, 20000 random operations, dropped regions, large pages and the "
            "below-4-GiB split%s; peak %u runs, %llu KiB, %llu KiB below 4 GiB\n",
            straddles ? "" : " (one side only)",
            stats.peak_runs, (unsigned long long)(stats.peak_backed_bytes >> 10),

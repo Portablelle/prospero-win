@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: local <local@invalid>
+Date: Tue, 27 Oct 2026 03:00:00 +0100
+Subject: [PATCH] ntdll, server: PS5 PW_WINE_TUNE processor count, alert spin and thread rules.
+
+Opt-in per profile (PW_WINE_TUNE, wine/ps5/pw_wine_tune.h): cpus=N reports
+fewer processors to the game; spin=N lets an alert wait poll its flag before
+parking in the kernel (with PW_WINE_ALERT_FAST=1); name rules give a thread a
+CPU mask and a SCHED_FIFO priority when it starts and when the game names it.
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index c2e94b4..47b9aeb 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -3497,12 +3497,23 @@ union tid_alert_entry
+ static union tid_alert_entry *tid_alert_blocks[65536];
+ static pthread_once_t pw_alert_once = PTHREAD_ONCE_INIT;
+ static int pw_alert_enabled;
++/* PW_WINE_TUNE spin=N: a wait polls its flag N times (with pause) before it
++ * parks in the kernel, so a wake that comes within a few microseconds, as a
++ * job system hands work back and forth, costs neither side a system call. */
++static unsigned int pw_alert_spin;
+ static void pw_alert_init(void)
+ {
+     const char *value = getenv("PW_WINE_ALERT_FAST");
++    const char *tune = getenv("PW_WINE_TUNE"), *spin = tune ? strstr(tune, "spin=") : NULL;
++
+     pw_alert_enabled = value && !strcmp(value, "1");
++    if (pw_alert_enabled && spin && (spin == tune || spin[-1] == ','))
++    {
++        long count = atol(spin + 5);
++        if (count > 0) pw_alert_spin = count > 200000 ? 200000 : (unsigned int)count;
++    }
+     if (pw_alert_enabled)
+-        fprintf(stderr, "PW_WINE_ALERT_FAST version=1 enabled=1 spin=0 backend=atomic-kqueue\n");
++        fprintf(stderr, "PW_WINE_ALERT_FAST version=1 enabled=1 spin=%u backend=atomic-kqueue\n", pw_alert_spin);
+ }
+ static int pw_alert_active(void)
+ {
+@@ -3759,6 +3770,7 @@ static NTSTATUS WINAPI pw_tf3_orig_NtWaitForAlertByThreadId( const void *address
+         struct kevent wait_event;
+ #ifdef __PROSPERO__
+         int active = pw_alert_active();
++        int spin = active && pw_alert_spin && !(timeout && !timeout->QuadPart);
+ #endif
+ 
+         if (timeout)
+@@ -3778,6 +3790,18 @@ static NTSTATUS WINAPI pw_tf3_orig_NtWaitForAlertByThreadId( const void *address
+                     pw_tf3_alert_fast_event(0);
+                     return STATUS_ALERTED;
+                 }
++                if (spin)
++                {
++                    unsigned int i;
++
++                    spin = 0;
++                    for (i = 0; i < pw_alert_spin; i++)
++                    {
++                        __builtin_ia32_pause();
++                        if (__atomic_load_n(&entry->ps5_alert_state, __ATOMIC_RELAXED) & PW_ALERT_PENDING) break;
++                    }
++                    continue;  /* take it, or park */
++                }
+                 if (!pw_alert_fast_arm(&entry->ps5_alert_state)) continue;
+             }
+ #endif
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 107d5d1..61c3b72 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -1799,6 +1799,17 @@ void init_cpu_info(void)
+     }
+ #ifdef __PROSPERO__
+     num = ps5_process_cpus( num );
++    {
++        /* PW_WINE_TUNE cpus=N (wine/ps5/pw_wine_tune.h): report fewer, so a
++         * game that starts a worker per processor leaves CPUs to its main
++         * threads. The process keeps every CPU it may run on. */
++        const char *tune = getenv( "PW_WINE_TUNE" ), *cpus = tune ? strstr( tune, "cpus=" ) : NULL;
++        if (cpus && (cpus == tune || cpus[-1] == ','))
++        {
++            long count = atol( cpus + 5 );
++            if (count >= 1 && count < num) num = count;
++        }
++    }
+ #endif
+ #elif defined(CTL_HW) && defined(HW_NCPU)
+     int mib[2];
+diff --git a/server/thread.c b/server/thread.c
+index d23a29d..d6936bb 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -910,6 +910,20 @@ void set_thread_disable_boost( struct thread *thread, int disable_boost )
+     apply_thread_priority( thread );
+ }
+ 
++#ifdef __PROSPERO__
++/* PW_WINE_TUNE thread rules (wine/ps5/pw_wine_threads.c): applied when a
++ * thread starts, unnamed, and again when the game names it. */
++static void ps5_tune_thread( struct thread *thread )
++{
++    extern int pw_wine_thread_tune( long tid, const unsigned short *name, size_t length );
++
++    if (thread->unix_tid == -1) return;
++    pw_wine_thread_tune( thread->unix_tid, (const unsigned short *)thread->desc, thread->desc_len / sizeof(WCHAR) );
++}
++#else
++static void ps5_tune_thread( struct thread *thread ) { (void)thread; }
++#endif
++
+ /* set all information about a thread */
+ static void set_thread_info( struct thread *thread,
+                              const struct set_thread_info_request *req )
+@@ -955,6 +969,7 @@ static void set_thread_info( struct thread *thread,
+                 thread->desc = desc;
+                 thread->desc_len = desc_len;
+             }
++            ps5_tune_thread( thread );
+         }
+         else
+         {
+@@ -1942,6 +1957,7 @@ DECL_HANDLER(init_thread)
+     if (!current->is_system) generate_debug_event( current, DbgCreateThreadStateChange, &req->entry );
+     set_thread_base_priority( current, current->base_priority );
+     set_thread_affinity( current, current->affinity );
++    ps5_tune_thread( current );
+ 
+     reply->suspend = (is_thread_suspended( current ) || current->context != NULL);
+ }
