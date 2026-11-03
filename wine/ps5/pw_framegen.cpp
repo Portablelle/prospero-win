@@ -764,6 +764,12 @@ VkResult present_owned(Chain *c,VkQueue queue,const VkPresentInfoKHR *info,uint3
     return result;
 }
 
+VkResult present_error(const VkPresentInfoKHR *info,VkResult result)
+{
+    if(info->pResults) info->pResults[0]=result;
+    return result;
+}
+
 /* One submission for the program's frame: copy it aside, then make and draw
  * each picture between it and the previous one into an acquired image. The
  * pictures are presented first, then the program's frame. */
@@ -774,7 +780,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     Chain *c = find_chain(info->pSwapchains[0]);
     if (c && c->failed) {
         pthread_mutex_unlock(&lock);
-        return VK_ERROR_OUT_OF_DATE_KHR;
+        return present_error(info,VK_ERROR_OUT_OF_DATE_KHR);
     }
     // Caller-owned fences and per-present mode changes keep their original
     // semantics; these presentations are not split into generated pictures.
@@ -788,13 +794,13 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
         bool failed=c && c->failed;
         if(c) c->have_prev=false;
         pthread_mutex_unlock(&lock);
-        return failed ? VK_ERROR_OUT_OF_DATE_KHR : real_QueuePresentKHR(queue, info);
+        return failed ? present_error(info,VK_ERROR_OUT_OF_DATE_KHR) : real_QueuePresentKHR(queue, info);
     }
     /* Allocation failure leaves the application's original presentation
      * untouched: no internal image or semaphore has been acquired yet. */
     if (info->waitSemaphoreCount > UINT32_MAX - (kMaxFactor - 1)) {
         pthread_mutex_unlock(&lock);
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return present_error(info,VK_ERROR_OUT_OF_HOST_MEMORY);
     }
     size_t capacity = (size_t)info->waitSemaphoreCount + kMaxFactor - 1;
     std::unique_ptr<VkSemaphore[]> waits(new (std::nothrow) VkSemaphore[capacity]);
@@ -810,7 +816,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     auto fail = [&](VkResult result) {
         c->failed = true;
         pthread_mutex_unlock(&lock);
-        return result;
+        return present_error(info,result);
     };
     uint32_t s = c->slot;
     VkResult result = vkWaitForFences(c->device, 1, &c->fence[s], VK_TRUE, UINT64_MAX);
@@ -939,6 +945,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     c->have_prev = true;
     count_frame(c, presented);
     result = present_owned(c,queue,&real,info->pImageIndices[0]);
+    if(info->pResults) info->pResults[0]=result;
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) c->failed = true;
     pthread_mutex_unlock(&lock);
     return result;

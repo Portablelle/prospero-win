@@ -164,7 +164,11 @@ size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input,
             /* A complete tap can be batched between samples. Preserve its
              * two edges without letting it override the final held state. */
             int tap = !before && !after && (pressed & released & mask);
-            int retap=before && after && (pressed & released & mask) && !(previous & mask & ~released);
+            // Edges from several controls have no ordering information. A
+            // release/repress is unambiguous only when a single control was
+            // active in this aggregate throughout the batch.
+            uint32_t active=(previous|next|pressed|released)&mask;
+            int retap=before && after && active && !(active&(active-1)) && (pressed & released & mask);
             if((before!=after && after==down) || retap || (tap && down))
                 pending[used++]=(PwWineInput){binding->kind==PW_GAME_BIND_KEY?PW_WINE_INPUT_KEY:PW_WINE_INPUT_MOUSE_BUTTON,
                                          binding->code,0,0,(uint32_t)down};

@@ -119,10 +119,13 @@ int main()
         assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_SUCCESS);
         assert(waits_seen==20);
     }
+    VkResult per_chain=VK_NOT_READY;info.pResults=&per_chain;
     image=3;pending[image]=false;submit_failed=true;
     assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_ERROR_OUT_OF_HOST_MEMORY);
+    assert(per_chain==VK_ERROR_OUT_OF_HOST_MEMORY);per_chain=VK_NOT_READY;
     unsigned before=fence_waits;
     assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_ERROR_OUT_OF_DATE_KHR);
+    assert(per_chain==VK_ERROR_OUT_OF_DATE_KHR);
     assert(fence_waits==before); /* no wait on the failed submission's reset fence */
     chains[0]=nullptr;
     chain.failed=false;
@@ -151,6 +154,7 @@ int main()
     target=2;acquisition_error=true;
     assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_ERROR_SURFACE_LOST_KHR);
     assert(acquisition_pending && abandoned->acquire_pending[0][0]);
+    assert(per_chain==VK_ERROR_SURFACE_LOST_KHR);
     chains[0]=nullptr;device_loaded=true;
     pw_fgvk_DeviceWaitIdle=device_idle;pw_fgvk_DestroySemaphore=destroy_semaphore;pw_fgvk_DestroyFence=destroy_fence;
     free_chain(abandoned);assert(!acquisition_pending && !pending[3]);device_loaded=false;acquisition_error=false;
