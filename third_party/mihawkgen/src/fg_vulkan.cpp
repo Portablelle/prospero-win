@@ -268,8 +268,15 @@ void fg_record_generate(fg_context *ctx, VkCommandBuffer cmd, uint32_t slot, fg_
 		fg_splat_record(ctx->splat, cmd, slot, pair, output);
 		return;
 	}
-	const VkImageView inputs[kInputBindings] = { pair->prev_color, pair->next_color, pair->prev_depth,
-		pair->next_depth, pair->next_motion };
+	// Every descriptor written must name a real view even when the selected
+	// shader does not use depth or motion (repeat/blend). Do not require
+	// the application's device to have enabled nullDescriptor.
+	if (!pair->prev_color || !pair->next_color ||
+	    (method == FG_METHOD_MVWARP && !pair->next_motion)) return;
+	const VkImageView inputs[kInputBindings] = { pair->prev_color, pair->next_color,
+		pair->prev_depth ? pair->prev_depth : pair->prev_color,
+		pair->next_depth ? pair->next_depth : pair->next_color,
+		pair->next_motion ? pair->next_motion : pair->next_color };
 	VkDescriptorImageInfo imageInfos[kInputBindings + 1]{};
 	VkWriteDescriptorSet writes[kInputBindings + 1]{};
 	const uint32_t r = ctx->ring[slot][method];

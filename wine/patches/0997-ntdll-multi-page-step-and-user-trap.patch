@@ -1,0 +1,103 @@
+From: Prospero Win local fixes <prospero-win@local>
+Subject: [PATCH] ntdll: restore all temporary host pages and preserve user TF
+
+An instruction can touch two restricted host pages before its single-step
+trap. Keep every temporarily opened page for that instruction, close them
+all on completion or a genuine later fault, and do not consume the program's
+own trap flag or single-step exception.
+
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2655,6 +2655,7 @@
+         rec.NumberParameters = 2;
+         rec.ExceptionInformation[0] = (ERROR_sig(sigcontext) >> 1) & 0x09;
+         rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
++        if (!data->subpage_step) data->subpage_user_tf = !!(EFL_sig(sigcontext) & 0x100);
+         if (!virtual_handle_fault( data, &rec, (void *)RSP_sig(sigcontext) ) ||
+             check_invalid_gsbase( data, sigcontext ))
+         {
+@@ -2662,6 +2663,12 @@
+             if (data->subpage_step) EFL_sig(sigcontext) |= 0x100;
+             leave_handler( data, sigcontext );
+             return;
++        }
++        /* A genuine fault on a later operand must not leave pages open
++         * while the application's exception handler executes. */
++        if (data->subpage_step) {
++            virtual_subpage_step_done( data );
++            if (!data->subpage_user_tf) EFL_sig(sigcontext) &= ~0x100;
+         }
+         if (rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+             rec.ExceptionInformation[0] == EXCEPTION_EXECUTE_FAULT)
+@@ -2726,9 +2733,12 @@
+ 
+     if (TRAP_sig(sigcontext) == TRAP_x86_TRCTRAP && virtual_subpage_step_done( data ))
+     {
+-        EFL_sig(sigcontext) &= ~0x100;  /* the step virtual_handle_fault asked for */
+-        leave_handler( data, sigcontext );
+-        return;
++        /* Preserve a program/debugger's existing TF and dispatch its step. */
++        if (!data->subpage_user_tf) {
++            EFL_sig(sigcontext) &= ~0x100;
++            leave_handler( data, sigcontext );
++            return;
++        }
+     }
+ 
+     save_context( data, &context, sigcontext );
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -122,7 +122,10 @@
+     unsigned int ps5_mutex_token; /* occupies the padding before ps5_sleep_asked on x86_64 */
+ #endif
+     LONGLONG     ps5_sleep_asked;   /* microseconds of sleep asked since then */
+-    void        *subpage_step;      /* host page to close again after a single step (virtual_handle_fault) */
++    void        *subpage_step;      /* non-NULL while one instruction has temporary page access */
++    void        *subpage_pages[16]; /* an instruction may touch several host pages */
++    unsigned int subpage_count;
++    BOOL         subpage_user_tf;  /* TF was set by the program before our first fault */
+     char         debug_info[0x800]; /* debug_info structure */
+     char         signal_stack[];    /* signal stack */
+     /* char kernel_stack[] */
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -5373,7 +5373,8 @@
+                 ret = STATUS_SUCCESS;
+         }
+     }
+-    if (ret == STATUS_ACCESS_VIOLATION && host_page_size != page_size && !data->subpage_step)
++    if (ret == STATUS_ACCESS_VIOLATION && host_page_size != page_size &&
++        data->subpage_count < ARRAY_SIZE(data->subpage_pages))
+     {
+         /* The page itself allows the access and the host page only refuses it for a
+          * neighbour's sake: open the host page for one instruction, and close it
+@@ -5402,6 +5403,10 @@
+         }
+         else if (!mprotect_exec( page, host_page_size, get_unix_prot( get_host_page_vprot( page ) ) ))
+         {
++            unsigned int i;
++            for (i = 0; i < data->subpage_count; i++)
++                if (data->subpage_pages[i] == page) break;
++            if (i == data->subpage_count) data->subpage_pages[data->subpage_count++] = page;
+             data->subpage_step = page;
+             ret = STATUS_SUCCESS;
+         }
+@@ -5421,11 +5426,13 @@
+  */
+ BOOL virtual_subpage_step_done( struct thread_data *data )
+ {
+-    char *page = data->subpage_step;
+-
+-    if (!page) return FALSE;
+-    mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
+-    mprotect_range( page, host_page_size, 0, 0 );
++    unsigned int i;
++
++    if (!data->subpage_step) return FALSE;
++    mutex_lock( &virtual_mutex );  /* already inside the signal handler */
++    for (i = 0; i < data->subpage_count; i++)
++        mprotect_range( data->subpage_pages[i], host_page_size, 0, 0 );
++    data->subpage_count = 0;
+     data->subpage_step = NULL;
+     mutex_unlock( &virtual_mutex );
+     return TRUE;

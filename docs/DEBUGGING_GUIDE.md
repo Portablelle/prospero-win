@@ -655,3 +655,5 @@ fixed it (a patch number, a profile setting, a recipe step). New techniques
 go in the numbered section they belong to. Keep lab-specific details (your
 console's address, your own scripts) out of this file: the repository is
 public.
+
+`make test-framegen VULKAN_HEADERS=/path/to/include` exercises the production presentation wrapper with a host Vulkan stub and delayed presentation waits. It covers image-owned semaphore reuse, nonblocking extra-image acquisition, more than sixteen application waits, failed-submission retirement and destroyed-device registry reuse. No GPU is required.

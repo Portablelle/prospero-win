@@ -23,6 +23,7 @@
 #include <string.h>
 #include <time.h>
 #include <new>
+#include <memory>
 #include "framegen.h"
 #include "pw_framegen.h"
 
@@ -81,7 +82,11 @@ struct Chain {
     uint32_t family = UINT32_MAX;
     VkCommandBuffer cmd[kSlots]{};
     VkFence fence[kSlots]{};
-    VkSemaphore real_done[kSlots]{}, acquired[kSlots][kMaxFactor - 1]{}, generated[kSlots][kMaxFactor - 1]{};
+    /* A presentation wait semaphore belongs to its image. Reacquisition of
+     * that image (not a rendering fence) orders its next signal after the
+     * presentation engine has consumed the previous wait. */
+    VkSemaphore ready[kMaxImages]{}, acquired[kSlots][kMaxFactor - 1]{};
+    bool failed = false;
     uint32_t slot = 0;
     /* the last second's counts, and the one being counted */
     uint64_t window_start = 0;
@@ -99,10 +104,11 @@ int factor_setting = -1, hud_setting = -1;
 VkInstance instance_seen = VK_NULL_HANDLE;
 bool device_loaded = false;
 struct { VkDevice device; VkPhysicalDevice physical; } devices[8];
-struct { VkQueue queue; uint32_t family; } queues[32];
+struct { VkQueue queue; uint32_t family; VkDevice device; } queues[32];
 Chain *chains[kMaxChains];
 
 PFN_vkCreateDevice real_CreateDevice;
+PFN_vkDestroyDevice real_DestroyDevice;
 PFN_vkGetDeviceQueue real_GetDeviceQueue;
 PFN_vkGetDeviceQueue2 real_GetDeviceQueue2;
 PFN_vkCreateSwapchainKHR real_CreateSwapchainKHR;
@@ -163,10 +169,10 @@ uint32_t family_of(VkQueue queue)
     return 0;  /* RADV's first family does graphics, compute and transfer */
 }
 
-void remember_queue(VkQueue queue, uint32_t family)
+void remember_queue(VkDevice device, VkQueue queue, uint32_t family)
 {
     for (auto &q : queues)
-        if (!q.queue || q.queue == queue) { q.queue = queue; q.family = family; return; }
+        if (!q.queue || q.queue == queue) { q.queue = queue; q.family = family; q.device = device; return; }
 }
 
 uint32_t memory_type(VkPhysicalDevice physical, uint32_t bits, VkMemoryPropertyFlags flags)
@@ -265,12 +271,12 @@ void free_chain(Chain *c)
         if (c->font_memory) vkFreeMemory(c->device, c->font_memory, nullptr);
         for (uint32_t s = 0; s < kSlots; s++) {
             if (c->fence[s]) vkDestroyFence(c->device, c->fence[s], nullptr);
-            if (c->real_done[s]) vkDestroySemaphore(c->device, c->real_done[s], nullptr);
             for (uint32_t k = 0; k < kMaxFactor - 1; k++) {
                 if (c->acquired[s][k]) vkDestroySemaphore(c->device, c->acquired[s][k], nullptr);
-                if (c->generated[s][k]) vkDestroySemaphore(c->device, c->generated[s][k], nullptr);
             }
         }
+        for (auto semaphore : c->ready)
+            if (semaphore) vkDestroySemaphore(c->device, semaphore, nullptr);
         if (c->pool) vkDestroyCommandPool(c->device, c->pool, nullptr);
     }
     delete c;
@@ -282,7 +288,7 @@ bool setup_chain(Chain *c)
     VkPhysicalDevice physical = physical_of(c->device);
     if (!physical || !load_device(c->device)) return false;
     uint32_t count = kMaxImages;
-    if (vkGetSwapchainImagesKHR(c->device, c->handle, &count, c->images) < 0) return false;
+    if (vkGetSwapchainImagesKHR(c->device, c->handle, &count, c->images) != VK_SUCCESS || !count || count > kMaxImages) return false;
     c->image_count = count;
     fg_create_info info{};
     info.device = c->device;
@@ -314,13 +320,12 @@ bool setup_chain(Chain *c)
     VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    for (uint32_t i = 0; i < c->image_count; i++)
+        if (vkCreateSemaphore(c->device, &semaphore, nullptr, &c->ready[i]) != VK_SUCCESS) return false;
     for (uint32_t s = 0; s < kSlots; s++) {
-        if (vkCreateFence(c->device, &fence, nullptr, &c->fence[s]) != VK_SUCCESS ||
-            vkCreateSemaphore(c->device, &semaphore, nullptr, &c->real_done[s]) != VK_SUCCESS)
-            return false;
+        if (vkCreateFence(c->device, &fence, nullptr, &c->fence[s]) != VK_SUCCESS) return false;
         for (uint32_t k = 0; k < c->factor - 1; k++)
-            if (vkCreateSemaphore(c->device, &semaphore, nullptr, &c->acquired[s][k]) != VK_SUCCESS ||
-                vkCreateSemaphore(c->device, &semaphore, nullptr, &c->generated[s][k]) != VK_SUCCESS)
+            if (vkCreateSemaphore(c->device, &semaphore, nullptr, &c->acquired[s][k]) != VK_SUCCESS)
                 return false;
     }
     fprintf(stderr, "pw_framegen: swapchain %ux%u, %u images, factor %u, %s%s\n", c->extent.width,
@@ -450,11 +455,24 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateDevice(VkPhysicalDevice physical, const 
     return result;
 }
 
+VKAPI_ATTR void VKAPI_CALL fg_DestroyDevice(VkDevice device, const VkAllocationCallbacks *allocator)
+{
+    pthread_mutex_lock(&lock);
+    for (auto *&c : chains)
+        if (c && c->device == device) { free_chain(c); c = nullptr; }
+    for (auto &q : queues)
+        if (q.device == device) q = {};
+    for (auto &d : devices)
+        if (d.device == device) d = {};
+    pthread_mutex_unlock(&lock);
+    real_DestroyDevice(device, allocator);
+}
+
 VKAPI_ATTR void VKAPI_CALL fg_GetDeviceQueue(VkDevice device, uint32_t family, uint32_t index, VkQueue *queue)
 {
     real_GetDeviceQueue(device, family, index, queue);
     pthread_mutex_lock(&lock);
-    remember_queue(*queue, family);
+    remember_queue(device, *queue, family);
     pthread_mutex_unlock(&lock);
 }
 
@@ -462,7 +480,7 @@ VKAPI_ATTR void VKAPI_CALL fg_GetDeviceQueue2(VkDevice device, const VkDeviceQue
 {
     real_GetDeviceQueue2(device, info, queue);
     pthread_mutex_lock(&lock);
-    remember_queue(*queue, info->queueFamilyIndex);
+    remember_queue(device, *queue, info->queueFamilyIndex);
     pthread_mutex_unlock(&lock);
 }
 
@@ -522,23 +540,52 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
         pthread_mutex_unlock(&lock);
         return real_QueuePresentKHR(queue, info);
     }
+    if (c->failed) {
+        pthread_mutex_unlock(&lock);
+        return VK_ERROR_OUT_OF_DATE_KHR;
+    }
+    /* Allocation failure leaves the application's original presentation
+     * untouched: no internal image or semaphore has been acquired yet. */
+    if (info->waitSemaphoreCount > UINT32_MAX - (kMaxFactor - 1)) {
+        pthread_mutex_unlock(&lock);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    size_t capacity = (size_t)info->waitSemaphoreCount + kMaxFactor - 1;
+    std::unique_ptr<VkSemaphore[]> waits(new (std::nothrow) VkSemaphore[capacity]);
+    std::unique_ptr<VkPipelineStageFlags[]> stages(new (std::nothrow) VkPipelineStageFlags[capacity]);
+    if (!waits || !stages) {
+        pthread_mutex_unlock(&lock);
+        return real_QueuePresentKHR(queue, info);
+    }
+    /* Once an internal image has been acquired, a failed operation requires
+     * swapchain recreation. Keep its resources until destruction, and never
+     * revisit a reset fence which has no successful submission behind it. */
+    auto fail = [&](VkResult result) {
+        c->failed = true;
+        pthread_mutex_unlock(&lock);
+        return result;
+    };
     uint32_t s = c->slot;
-    c->slot = (c->slot + 1) % kSlots;
-    vkWaitForFences(c->device, 1, &c->fence[s], VK_TRUE, UINT64_MAX);
-    vkResetFences(c->device, 1, &c->fence[s]);
+    VkResult result = vkWaitForFences(c->device, 1, &c->fence[s], VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS) return fail(result);
+    if (info->pImageIndices[0] >= c->image_count) return fail(VK_ERROR_OUT_OF_DATE_KHR);
 
     uint32_t generate = c->have_prev ? c->factor - 1 : 0, targets[kMaxFactor - 1];
     for (uint32_t k = 0; k < generate; k++) {
-        VkResult acquired = vkAcquireNextImageKHR(c->device, c->handle, UINT64_MAX, c->acquired[s][k],
+        VkResult acquired = vkAcquireNextImageKHR(c->device, c->handle, 0, c->acquired[s][k],
                                                   VK_NULL_HANDLE, &targets[k]);
-        if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) { generate = k; break; }
+        if (acquired == VK_NOT_READY || acquired == VK_TIMEOUT) { generate = k; break; }
+        if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) return fail(acquired);
+        if (targets[k] >= c->image_count) return fail(VK_ERROR_OUT_OF_DATE_KHR);
     }
 
     VkCommandBuffer cmd = c->cmd[s];
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkResetCommandBuffer(cmd, 0);
-    vkBeginCommandBuffer(cmd, &begin);
+    result = vkResetCommandBuffer(cmd, 0);
+    if (result != VK_SUCCESS) return fail(result);
+    result = vkBeginCommandBuffer(cmd, &begin);
+    if (result != VK_SUCCESS) return fail(result);
     bool counter = c->font.view != VK_NULL_HANDLE;
     if (counter && !c->font_uploaded) record_font_upload(c, cmd);
     VkImage frame = c->images[info->pImageIndices[0]];
@@ -590,12 +637,12 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
                 VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     }
-    vkEndCommandBuffer(cmd);
+    result = vkEndCommandBuffer(cmd);
+    if (result != VK_SUCCESS) return fail(result);
 
-    VkSemaphore waits[16 + kMaxFactor], signals[kMaxFactor];
-    VkPipelineStageFlags stages[16 + kMaxFactor];
+    VkSemaphore signals[kMaxFactor];
     uint32_t wait_count = 0, signal_count = 0;
-    for (uint32_t i = 0; i < info->waitSemaphoreCount && wait_count < 16; i++, wait_count++) {
+    for (uint32_t i = 0; i < info->waitSemaphoreCount; i++, wait_count++) {
         waits[wait_count] = info->pWaitSemaphores[i];
         stages[wait_count] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     }
@@ -603,41 +650,43 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
         waits[wait_count] = c->acquired[s][k];
         stages[wait_count] = VK_PIPELINE_STAGE_TRANSFER_BIT;
     }
-    for (uint32_t k = 0; k < generate; k++) signals[signal_count++] = c->generated[s][k];
-    signals[signal_count++] = c->real_done[s];
+    for (uint32_t k = 0; k < generate; k++) signals[signal_count++] = c->ready[targets[k]];
+    signals[signal_count++] = c->ready[info->pImageIndices[0]];
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.waitSemaphoreCount = wait_count;
-    submit.pWaitSemaphores = waits;
-    submit.pWaitDstStageMask = stages;
+    submit.pWaitSemaphores = waits.get();
+    submit.pWaitDstStageMask = stages.get();
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = signal_count;
     submit.pSignalSemaphores = signals;
-    VkResult result = vkQueueSubmit(queue, 1, &submit, c->fence[s]);
-    if (result != VK_SUCCESS) {
-        pthread_mutex_unlock(&lock);
-        fprintf(stderr, "pw_framegen: submit failed (%d)\n", (int)result);
-        return result;
-    }
+    result = vkResetFences(c->device, 1, &c->fence[s]);
+    if (result != VK_SUCCESS) return fail(result);
+    result = vkQueueSubmit(queue, 1, &submit, c->fence[s]);
+    if (result != VK_SUCCESS) return fail(result);
+    c->slot = (c->slot + 1) % kSlots;
     uint32_t presented = 0;
     for (uint32_t k = 0; k < generate; k++) {
         VkPresentInfoKHR picture{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         picture.waitSemaphoreCount = 1;
-        picture.pWaitSemaphores = &c->generated[s][k];
+        picture.pWaitSemaphores = &c->ready[targets[k]];
         picture.swapchainCount = 1;
         picture.pSwapchains = &c->handle;
         picture.pImageIndices = &targets[k];
         VkResult shown = real_QueuePresentKHR(queue, &picture);
         presented += shown == VK_SUCCESS || shown == VK_SUBOPTIMAL_KHR;
+        if (shown != VK_SUCCESS && shown != VK_SUBOPTIMAL_KHR) c->failed = true;
     }
     VkPresentInfoKHR real = *info;
     real.waitSemaphoreCount = 1;
-    real.pWaitSemaphores = &c->real_done[s];
+    real.pWaitSemaphores = &c->ready[info->pImageIndices[0]];
     c->cur ^= 1;
     c->have_prev = true;
     count_frame(c, presented);
+    result = real_QueuePresentKHR(queue, &real);
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) c->failed = true;
     pthread_mutex_unlock(&lock);
-    return real_QueuePresentKHR(queue, &real);
+    return result;
 }
 
 /* The wrapper for name, remembering the driver's own; NULL when there is none. */
@@ -649,6 +698,7 @@ PFN_vkVoidFunction wrap(const char *name, PFN_vkVoidFunction real)
         return (PFN_vkVoidFunction)fg_##fn; \
     }
     PW_FRAMEGEN_WRAP(CreateDevice)
+    PW_FRAMEGEN_WRAP(DestroyDevice)
     PW_FRAMEGEN_WRAP(GetDeviceQueue)
     PW_FRAMEGEN_WRAP(GetDeviceQueue2)
     PW_FRAMEGEN_WRAP(CreateSwapchainKHR)

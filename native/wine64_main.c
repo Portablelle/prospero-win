@@ -393,6 +393,14 @@ static void *(*wine_dlsym_fn)(void *, const char *);
 /* The console's on-screen keyboard (native/pw_osk_ps5.h): a dialog still up
  * when the title leaves the game is ended with it. */
 static PwOskPs5 osk_ps5;
+static PwWineKeyOwners key_owners;
+static unsigned key_source;
+static int (*raw_post_input)(const PwWineInput *);
+static int owned_post_input(const PwWineInput *input)
+{
+    return pw_wine_key_owned_post(&key_owners, key_source, raw_post_input, input);
+}
+
 
 /* Once the display is Vulkan's, the game's last flips are still on their
  * way when Wine exits: RADV's own flip thread submits them after the game's
@@ -1081,7 +1089,6 @@ int main(int argc, char **argv)
     const PwGameProfile *game = NULL;
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0 };
-    uint8_t movement_held = 0;
     PwWineKeyboardStick keyboard_stick_state = { 0 };
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
@@ -1341,6 +1348,8 @@ int main(int argc, char **argv)
             (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_set_present_sink");
         post_input = (int (*)(const PwWineInput *))
             (uintptr_t)pw_prx_lookup(start.descriptor, "pw_wine_post_input");
+        raw_post_input = post_input;
+        if (post_input) post_input = owned_post_input;
         /* xinput mode: the DualSense is also the game's XInput controller
          * 0, read by Wine's xinput (patch 0470); bindings still apply. */
         if (game_input.mode == PW_GAME_INPUT_XINPUT) {
@@ -1481,7 +1490,7 @@ int main(int argc, char **argv)
                 if (post_input(&input) == 0) posted++;
                 else refused++;
             }
-            if (poll.wheel) {
+            if (poll.wheel && !dialog) {
                 input = (PwWineInput){ PW_WINE_INPUT_MOUSE_WHEEL, 0, poll.wheel, 0, 0 };
                 if (post_input(&input) == 0) posted++;
                 else refused++;
@@ -1599,17 +1608,6 @@ int main(int argc, char **argv)
 #endif
             if (pad_read || scripted) set_pad(connected ? &state : NULL);
         }
-        if (post_input && (game_input.left_stick_wasd || movement_held)) {
-            int active = pad_read && game_input.left_stick_wasd &&
-                game_input.keyboard_stick == PW_GAME_STICK_NONE && seen->core.connected;
-            size_t movement_count = pw_wine_movement_step(&movement_held,
-                active ? seen->left_stick.x : 128, active ? seen->left_stick.y : 128,
-                events, sizeof(events) / sizeof(events[0]));
-            for (size_t i = 0; i < movement_count; i++) {
-                if (post_input(&events[i]) == 0) posted++;
-                else refused++;
-            }
-        }
         /* XInput controllers 1..3: the other signed-in users' DualSenses,
          * each with its own rumble, once the game has asked xinput for one
          * of them; the sink is asked once a second until then. A user who
@@ -1643,7 +1641,7 @@ int main(int argc, char **argv)
                     continue;
                 }
                 const PwPadPs5 *read = pw_pad_ps5_read(player) == PW_OK ? player : NULL;
-                if (read && menu_open) {
+                if (read && (menu_open || osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN)) {
                     idle = *player;
                     idle.core.previous_buttons = idle.core.pressed_edges = idle.core.released_edges = 0;
                     idle.left_stick.x = idle.left_stick.y = 0x80;
@@ -1665,10 +1663,10 @@ int main(int argc, char **argv)
             /* [input] keyboard_stick: one stick drives the four direction
              * keys (WASD by default), for games that read the keyboard for
              * movement and cannot use a stick axis. */
-            if (game_input.keyboard_stick != PW_GAME_STICK_NONE) {
+            if (game_input.keyboard_stick != PW_GAME_STICK_NONE || game_input.left_stick_wasd) {
                 const PwPadPs5Stick *key_stick =
-                    game_input.keyboard_stick == PW_GAME_STICK_LEFT ?
-                    &seen->left_stick : &seen->right_stick;
+                    game_input.keyboard_stick == PW_GAME_STICK_RIGHT ?
+                    &seen->right_stick : &seen->left_stick;
                 count += pw_wine_keyboard_stick_step(&game_input, key_stick->x, key_stick->y, 1,
                                                     &keyboard_stick_state, &events[count],
                                                     sizeof(events) / sizeof(events[0]) - count - 1);
@@ -1724,11 +1722,13 @@ int main(int argc, char **argv)
                 if (ended) pw_osk_finished(&osk, ended == 1 ? typed : NULL);
             }
             count = pw_osk_keys(&osk, osk_keys, sizeof(osk_keys) / sizeof(osk_keys[0]));
+            key_source = 1;
             for (size_t i = 0; i < count; i++) {
                 PwWineInput input = { PW_WINE_INPUT_KEY, osk_keys[i].vk, 0, 0, osk_keys[i].down };
                 if (post_input(&input) == 0) posted++;
                 else refused++;
             }
+            key_source = 0;
         }
         /* The second player's pad: keys only, through its own preset, read
          * whether or not the first pad's read worked. A user who signs in

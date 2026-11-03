@@ -645,3 +645,15 @@ wine/patches/0983-ntdll-ps5-name-the-occupant-of-a-refused-reservation.patch
 wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
 wine/patches/0986-ntdll-keep-a-host-page-whole-when-accesses-beside-an-inaccessible-page-run-hot.patch
 tests/test_wine_mouse_wheel.py
+
+# Local launcher/runtime compatibility and regression checks
+native/pw_launcher_settings.c
+native/pw_launcher_settings.h
+tests/test_pw_framegen.cpp
+tests/test_pw_launcher_settings.c
+tests/test_pw_wine_tune.c
+wine/patches/0995-ntdll-local-alert-fast-lfh-hot-wait-profile.patch
+wine/patches/0996-ntdll-server-ps5-tune-processor-count-and-thread-rules.patch
+wine/patches/0997-ntdll-multi-page-step-and-user-trap.patch
+wine/ps5/pw_wine_tune.h
+wine/ps5/vk64/pe64-batching.patch

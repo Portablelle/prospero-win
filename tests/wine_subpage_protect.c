@@ -11,7 +11,7 @@
 #define PAGES 20
 
 static unsigned char *base;
-static volatile LONG faults, fault_page, fault_write;
+static volatile LONG faults, fault_page, fault_write, user_step;
 
 /* Records the fault and makes the page writable again, as an emulator does
  * after it drops the code it compiled from that page. */
@@ -21,6 +21,11 @@ static LONG CALLBACK handler(EXCEPTION_POINTERS *info)
     unsigned char *addr = (unsigned char *)rec->ExceptionInformation[1];
     DWORD old;
 
+    if (rec->ExceptionCode == EXCEPTION_SINGLE_STEP && user_step) {
+        user_step = 0;
+        info->ContextRecord->EFlags &= ~0x100;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (rec->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || addr < base || addr >= base + PAGES * PAGE)
         return EXCEPTION_CONTINUE_SEARCH;
     faults++;
@@ -125,6 +130,22 @@ int main(void)
     sink = base[17 * PAGE + 9];
     ok = ok && expect("read of the inaccessible page protected again", faults - got, 1) && fault_page == 17;
 
+#ifdef __x86_64__
+    /* One vector store spans two writable pages, each in a different
+     * restricted 16 KiB host page. Neither access is the program's fault. */
+    ok = ok && protect(2, PAGE_NOACCESS) && protect(3, PAGE_READWRITE) &&
+         protect(4, PAGE_READWRITE) && protect(5, PAGE_NOACCESS);
+    got = faults;
+    __asm__ volatile("pxor %%xmm0, %%xmm0; movdqu %%xmm0, (%0)"
+                     : : "r"(base + 4 * PAGE - 8) : "xmm0", "memory");
+    ok = ok && expect("vector store across two restricted host pages", faults - got, 0);
+    /* TF already belongs to the program when the permitted read faults
+     * because of its neighbour. Our handler must still receive its trap. */
+    user_step = 1;
+    __asm__ volatile("pushfq; orq $0x100, (%%rsp); popfq; movb (%0), %%al"
+                     : : "r"(base + 3 * PAGE) : "rax", "memory", "cc");
+    ok = ok && user_step == 0;
+#endif
     printf("subpage verdict=%s\n", ok ? "pass" : "fail");
     fflush(stdout);
     return ok ? 0 : 1;

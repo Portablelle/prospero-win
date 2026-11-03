@@ -21,6 +21,12 @@
 #include "../wine/ps5/pw_wine_sink.h"
 #include "pw_pad_ps5.h"
 
+/* Physical/controller input and OSK typing own their key state separately.
+ * An owner releasing a key must not release another owner's held key. */
+typedef struct PwWineKeyOwners { uint8_t held[256]; } PwWineKeyOwners;
+int pw_wine_key_owned_post(PwWineKeyOwners *owners, unsigned owner,
+                           int (*sink)(const PwWineInput *), const PwWineInput *input);
+
 typedef struct PwWineFrameBox {
     pthread_mutex_t lock;
     uint8_t *pixels;              /* the caller's storage; rows packed, width * 4 bytes */

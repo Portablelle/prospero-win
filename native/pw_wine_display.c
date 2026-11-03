@@ -2,6 +2,18 @@
 #include "pw_wine_display.h"
 #include <string.h>
 
+int pw_wine_key_owned_post(PwWineKeyOwners *owners, unsigned owner,
+                           int (*sink)(const PwWineInput *), const PwWineInput *input)
+{
+    if (!owners || owner >= 2 || !sink || !input) return -1;
+    if (input->type != PW_WINE_INPUT_KEY || input->code >= 256) return sink(input);
+    uint8_t before = owners->held[input->code], bit = (uint8_t)(1u << owner);
+    uint8_t after = input->down ? before | bit : before & (uint8_t)~bit;
+    if (!!before != !!after && sink(input) != 0) return -1;
+    owners->held[input->code] = after;
+    return 0;
+}
+
 int pw_wine_frame_box_init(PwWineFrameBox *box, uint8_t *storage, size_t bytes)
 {
     if (!box || !storage || !bytes) return -1;
@@ -98,48 +110,45 @@ size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t 
 enum { KEY_STICK_UP = 1u << 0, KEY_STICK_DOWN = 1u << 1,
        KEY_STICK_LEFT = 1u << 2, KEY_STICK_RIGHT = 1u << 3 };
 
-static int stick_direction(uint8_t value, int negative, int was_held, unsigned deadzone)
+/* One transition engine for configurable mappings and the legacy WASD
+ * shorthand. The legacy thresholds (48/32) remain unchanged. */
+static size_t stick_keys_step(uint8_t *held, uint8_t x, uint8_t y, int connected,
+                              int press, int release, const uint16_t keys[4],
+                              PwWineInput *out, size_t max)
 {
-    /* Five raw stick counts of hysteresis keep a noisy axis from tapping the
-     * key repeatedly at the edge of its dead zone. */
-    int threshold = (int)(127u * deadzone / 100u);
-    int delta = (int)value - 128;
-    if (negative) return delta < -(threshold - (was_held ? 5 : 0));
-    return delta > threshold - (was_held ? 5 : 0);
+    if (!held || !out || !keys) return 0;
+    const int axes[4] = {128-(int)y, (int)y-128, 128-(int)x, (int)x-128};
+    uint8_t next = 0;
+    size_t count = 0;
+    for (unsigned i=0;i<4;i++) {
+        uint8_t bit=(uint8_t)(1u<<i);
+        if (connected && axes[i]>=((*held & bit)?release:press)) next |= bit;
+        if ((*held ^ next) & bit) count++;
+    }
+    if (count > max) return 0; /* never lose an edge when the buffer is full */
+    count=0;
+    for(int down=0;down<=1;down++)
+        for(unsigned i=0;i<4;i++) {
+            uint8_t bit=(uint8_t)(1u<<i);
+            if (((*held ^ next)&bit) && !!(next&bit)==down)
+                out[count++]=(PwWineInput){PW_WINE_INPUT_KEY,keys[i],0,0,down};
+        }
+    *held=next;
+    return count;
 }
 
 size_t pw_wine_keyboard_stick_step(const PwGameInput *input, uint8_t stick_x, uint8_t stick_y,
                                   int connected, PwWineKeyboardStick *state,
                                   PwWineInput *out, size_t max)
 {
-    static const uint8_t bits[4] = { KEY_STICK_UP, KEY_STICK_DOWN, KEY_STICK_LEFT, KEY_STICK_RIGHT };
-    uint8_t wanted = 0, previous;
-    size_t used = 0;
-
-    if (!input || !state || !out) return 0;
-    previous = state->held;
-    if (connected && input->keyboard_stick != PW_GAME_STICK_NONE) {
-        if (stick_direction(stick_y, 1, !!(previous & KEY_STICK_UP), input->stick_deadzone))
-            wanted |= KEY_STICK_UP;
-        if (stick_direction(stick_y, 0, !!(previous & KEY_STICK_DOWN), input->stick_deadzone))
-            wanted |= KEY_STICK_DOWN;
-        if (stick_direction(stick_x, 1, !!(previous & KEY_STICK_LEFT), input->stick_deadzone))
-            wanted |= KEY_STICK_LEFT;
-        if (stick_direction(stick_x, 0, !!(previous & KEY_STICK_RIGHT), input->stick_deadzone))
-            wanted |= KEY_STICK_RIGHT;
-    }
-    /* Release first so a direct direction reversal cannot momentarily hold
-     * both keys. The caller reserves room for all four transitions. */
-    for (size_t i = 0; i < 4 && used < max; i++) {
-        if ((previous & bits[i]) && !(wanted & bits[i]))
-            out[used++] = (PwWineInput){ PW_WINE_INPUT_KEY, input->stick_keys[i], 0, 0, 0 };
-    }
-    for (size_t i = 0; i < 4 && used < max; i++) {
-        if (!(previous & bits[i]) && (wanted & bits[i]))
-            out[used++] = (PwWineInput){ PW_WINE_INPUT_KEY, input->stick_keys[i], 0, 0, 1 };
-    }
-    state->held = wanted;
-    return used;
+    static const uint16_t legacy_keys[4]={'W','S','A','D'};
+    if (!input || !state) return 0;
+    int legacy=input->keyboard_stick==PW_GAME_STICK_NONE && input->left_stick_wasd;
+    int threshold=(int)(127u*input->stick_deadzone/100u);
+    return stick_keys_step(&state->held,stick_x,stick_y,
+                           connected && (legacy || input->keyboard_stick!=PW_GAME_STICK_NONE),
+                           legacy?48:threshold+1,legacy?32:threshold-4,
+                           legacy?legacy_keys:input->stick_keys,out,max);
 }
 
 static const struct { uint32_t dualsense; uint16_t xinput; } pad_buttons[] = {
@@ -232,27 +241,11 @@ int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_
     return 1;
 }
 
-/* Digital movement for games whose controller backend is unavailable. */
+/* Compatibility entry point; the transition engine is shared above. */
 size_t pw_wine_movement_step(uint8_t *held, uint8_t x, uint8_t y,
                              PwWineInput *out, size_t max)
 {
-    static const uint16_t keys[4] = { 'W', 'S', 'A', 'D' };
-    if (!held || !out || max < 4) return 0;
-    const int axes[4] = { 128 - (int)y, (int)y - 128,
-                          128 - (int)x, (int)x - 128 };
-    uint8_t next = 0;
-    size_t count = 0;
-    for (unsigned i = 0; i < 4; i++) {
-        uint8_t bit = (uint8_t)(1u << i);
-        if (axes[i] >= ((*held & bit) ? 32 : 48)) next |= bit;
-    }
-    /* Release old directions before pressing new ones on a fast reversal. */
-    for (int down = 0; down <= 1; down++)
-        for (unsigned i = 0; i < 4; i++) {
-            uint8_t bit = (uint8_t)(1u << i);
-            if (((*held ^ next) & bit) && !!(next & bit) == down)
-                out[count++] = (PwWineInput){ PW_WINE_INPUT_KEY, keys[i], 0, 0, down };
-        }
-    *held = next;
-    return count;
+    static const uint16_t keys[4]={'W','S','A','D'};
+    if (max < 4) return 0;
+    return stick_keys_step(held,x,y,1,48,32,keys,out,max);
 }

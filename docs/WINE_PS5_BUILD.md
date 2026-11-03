@@ -1596,3 +1596,5 @@ console, `access()` reported the uploaded PRX absent in both places, while
 `open()` succeeds, so the probe's presence check opens the file.
 Wine-level initialisation (`__wine_main`, the wineserver) is not part of
 this probe.
+
+Local patch 0997 keeps all host pages temporarily opened by one instruction and preserves an application’s pre-existing trap flag. The subpage regression includes a vector store crossing two restricted host pages and a user single-step.

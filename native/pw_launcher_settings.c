@@ -2,6 +2,7 @@
 #include "pw_launcher_settings.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -51,7 +52,7 @@ int pw_settings_open(PwLauncherSettings *s,const PwWineLibraryEntry *e,const cha
 {
     if(!s||!e||e->status!=PW_OK)return -1;
     memset(s,0,sizeof(*s));s->draft=e->profile;snprintf(s->file,sizeof(s->file),"%s",e->file);
-    pw_wine_library_input(&e->profile,root,&s->input);
+    if (pw_wine_library_input(&e->profile,root,&s->input) != PW_OK) return -1;
     s->open=1;
     snprintf(s->status,sizeof(s->status),"MODIFICATIONS APPLIQUEES AU PROCHAIN LANCEMENT");
     pw_settings_labels(s);return 0;
@@ -74,6 +75,7 @@ void pw_settings_change(PwLauncherSettings *s,int d)
             "[input]\nmode=keyboard\nleft_stick=none\nmouse=left_stick\ncross=mouse_left\nr2=mouse_left\nsquare=mouse_right\ncircle=escape\ntriangle=enter\noptions=escape\n":s->mode==3?
             "[input]\nmode=xinput\nleft_stick=none\nmouse=none\n":"[input]\nmode=keyboard\nleft_stick=none\nmouse=none\n";
         pw_game_input_parse((const uint8_t *)layout,strlen(layout),&s->input);
+        s->input.mouse_speed=speed;
     }else if(s->row==2){
         int speed=(int)s->input.mouse_speed+(d>0?100:-100);if(speed<100)speed=100;if(speed>5000)speed=5000;s->input.mouse_speed=(unsigned)speed;
     }else if(s->row>=3&&s->row<20){
@@ -97,10 +99,10 @@ static int set(char *text,size_t cap,const char *section,const char *key,const c
         const char *q=p;while(q<p+len&&(*q==' '||*q=='\t'))q++;
         if(*q=='['){
             if(inside&&!found){int n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;found=1;}
-            inside=!strncmp(q,sec,strlen(sec));if(inside)seen=1;
+            inside=!strncasecmp(q,sec,strlen(sec));if(inside)seen=1;
         }
         int match=0;
-        if(inside&&!strncmp(q,key,strlen(key))){const char *v=q+strlen(key);while(*v==' '||*v=='\t')v++;match=*v=='=';}
+        if(inside&&!strncasecmp(q,key,strlen(key))){const char *v=q+strlen(key);while(*v==' '||*v=='\t')v++;match=*v=='=';}
         if(match){int n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;found=1;}
         else {if(used+len+2>=sizeof(tmp))return -1;memcpy(tmp+used,p,len);used+=len;if(!end)tmp[used++]='\n';}
         p+=len;
@@ -138,6 +140,14 @@ int pw_settings_text(const PwLauncherSettings *s,const char *original,char *out,
        set(out,cap,"input","left_stick",s->input.left_stick_wasd?"wasd":"none")||
        set(out,cap,"input","mouse",s->input.mouse==PW_GAME_STICK_LEFT?"left_stick":s->input.mouse==PW_GAME_STICK_RIGHT?"right_stick":"none"))return -1;
     snprintf(val,sizeof(val),"%u",s->input.mouse_speed);if(set(out,cap,"input","mouse_speed",val))return -1;
+    if(set(out,cap,"input","keyboard_stick",s->input.keyboard_stick==PW_GAME_STICK_LEFT?"left_stick":s->input.keyboard_stick==PW_GAME_STICK_RIGHT?"right_stick":"none"))return -1;
+    snprintf(val,sizeof(val),"%u",s->input.stick_deadzone);if(set(out,cap,"input","stick_deadzone",val))return -1;
+    snprintf(val,sizeof(val),"%u",s->input.rumble);if(set(out,cap,"input","rumble",val))return -1;
+    const char *directions[4]={"stick_up","stick_down","stick_left","stick_right"};
+    for(int i=0;i<4;i++){
+        PwGameBinding key={0};key.kind=PW_GAME_BIND_KEY;key.code=s->input.stick_keys[i];
+        binding_text(&key,val,sizeof(val));if(set(out,cap,"input",directions[i],val))return -1;
+    }
     for(int i=0;i<17;i++){binding_text(&s->input.bindings[i],val,sizeof(val));if(set(out,cap,"input",buttons[i],val))return -1;}
     PwGameProfile check;return pw_game_profile_parse((const uint8_t*)out,strlen(out),&check)==PW_OK?0:-1;
 }

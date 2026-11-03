@@ -299,3 +299,13 @@ native-release: test
 
 clean:
 	rm -rf build dist release tools/__pycache__ tests/__pycache__
+
+# Production frame-generation wrapper under a host Vulkan stub; no GPU needed.
+# Set VULKAN_HEADERS to the directory containing vulkan/vulkan.h.
+VULKAN_HEADERS ?= /usr/include
+.PHONY: test-framegen
+test-framegen: $(BUILD)/test_pw_framegen
+	$(BUILD)/test_pw_framegen
+$(BUILD)/test_pw_framegen: tests/test_pw_framegen.cpp wine/ps5/pw_framegen.cpp wine/ps5/pw_framegen_vk.h third_party/mihawkgen/include/framegen.h
+	@mkdir -p $(BUILD)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Wno-missing-field-initializers -I$(VULKAN_HEADERS) -Ithird_party/mihawkgen/include -pthread $< -o $@

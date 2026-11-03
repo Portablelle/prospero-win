@@ -391,9 +391,35 @@ static void test_keyboard_stick(void)
     assert(!pw_wine_keyboard_stick_step(&in, 0, 0, 1, &state, NULL, 4));
 }
 
+static int owned_calls, owned_fail;
+static int owned_sink(const PwWineInput *input)
+{
+    (void)input;
+    if (owned_fail) return -1;
+    owned_calls++;
+    return 0;
+}
+static void test_key_owners(void)
+{
+    PwWineKeyOwners owners={{0}};
+    PwWineInput key={PW_WINE_INPUT_KEY,0x10,0,0,1};
+    assert(!pw_wine_key_owned_post(&owners,0,owned_sink,&key));
+    assert(!pw_wine_key_owned_post(&owners,1,owned_sink,&key));
+    assert(owned_calls==1);
+    key.down=0;
+    assert(!pw_wine_key_owned_post(&owners,1,owned_sink,&key));
+    assert(owned_calls==1 && owners.held[0x10]==1);
+    assert(!pw_wine_key_owned_post(&owners,0,owned_sink,&key));
+    assert(owned_calls==2 && !owners.held[0x10]);
+    owned_fail=1;key.down=1;
+    assert(pw_wine_key_owned_post(&owners,0,owned_sink,&key)==-1 && !owners.held[0x10]);
+    owned_fail=0;
+}
+
 int main(void)
 {
     test_movement();
+    test_key_owners();
     test_frames();
     test_threads();
     test_inputs();

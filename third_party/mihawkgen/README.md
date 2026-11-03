@@ -18,3 +18,6 @@ compute passes recorded into the caller's command buffer. Its neural method
 
 To update: copy the same three parts of a newer commit and write its hash in
 `COMMIT`.
+
+Local adaptation: baseline passes bind valid color views for unused optional
+depth/motion descriptors, without requiring nullDescriptor device support.

@@ -12,10 +12,37 @@ static const char original[] =
 "prefix=needle\nruntime=wine-wow64\narchitecture=pe64\ngraphics=dxvk\n"
 "arguments=-force-d3d11 -screen-width 1280 -screen-height 720 -logFile \"C:\\path with spaces\\log.txt\"\n"
 "[display]\ndesktop=1280x720\nshow_fps=true\n[input]\nmode=keyboard\nmouse=right_stick\nleft_stick=wasd\nmouse_speed=900\ncross=space\n[runtime]\nshared_input=true\n";
+static void test_settings_regressions(const char *root)
+{
+    char text[8193],out[8193];
+    snprintf(text,sizeof(text),"%s",original);
+    char *input=strstr(text,"[input]");assert(input);memcpy(input,"[Input]",7);
+    char *button=strstr(text,"cross=space");assert(button);memcpy(button,"CROSS",5);
+    PwWineLibraryEntry e={0};strcpy(e.file,"needle.profile");
+    assert(pw_game_profile_parse((const uint8_t*)text,strlen(text),&e.profile)==PW_OK);
+    PwLauncherSettings s;
+    assert(!pw_settings_open(&s,&e,root));
+    assert(!pw_settings_text(&s,text,out,sizeof(out)));
+    assert(strstr(out,"cross = space") && !strstr(out,"CROSS="));
+    /* Switching to USB-only must replace inherited/new stick options too. */
+    s.input.keyboard_stick=PW_GAME_STICK_RIGHT;s.input.stick_keys[0]='Z';s.input.rumble=35;
+    s.row=1;s.mode=3;pw_settings_change(&s,1);
+    assert(s.mode==4);
+    assert(!pw_settings_text(&s,text,out,sizeof(out)));
+    PwGameProfile parsed;
+    assert(pw_game_profile_parse((const uint8_t*)out,strlen(out),&parsed)==PW_OK);
+    assert(parsed.input.keyboard_stick==PW_GAME_STICK_NONE && !parsed.input.left_stick_wasd);
+    assert(parsed.input.stick_keys[0]=='W' && parsed.input.rumble==100);
+    /* A missing preset cannot be turned into permanent fallback bindings. */
+    strcpy(e.profile.input.preset,"missing");
+    assert(pw_settings_open(&s,&e,root)==-1 && !s.open);
+}
+
 int main(int argc,char **argv)
 {
     char root[]="/tmp/pw-settings-XXXXXX",path[256],out[8193];assert(mkdtemp(root));
     snprintf(path,sizeof(path),"%s/profiles",root);assert(!mkdir(path,0700));
+    test_settings_regressions(root);
     PwWineLibraryEntry e={0};strcpy(e.file,"needle.profile");
     assert(pw_game_profile_parse((const uint8_t*)original,strlen(original),&e.profile)==PW_OK);
     PwLauncherSettings s;assert(!pw_settings_open(&s,&e,root));
