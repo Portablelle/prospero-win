@@ -87,6 +87,8 @@ struct Chain {
      * that image (not a rendering fence) orders its next signal after the
      * presentation engine has consumed the previous wait. */
     VkSemaphore ready[kMaxImages]{}, acquired[kSlots][kMaxFactor - 1]{};
+    VkFence acquire_fence[kSlots][kMaxFactor - 1]{};
+    bool acquire_pending[kSlots][kMaxFactor - 1]{};
     bool failed = false;
     uint32_t slot = 0;
     /* the last second's counts, and the one being counted */
@@ -298,6 +300,13 @@ void free_chain(Chain *c)
     if (!c) return;
     if (device_loaded) {
         vkDeviceWaitIdle(c->device);
+        // Device idle only covers queue work. An acquisition may have
+        // succeeded before a later failure prevented submitting its wait.
+        // Its fence retires the WSI signal before either sync object dies.
+        for(uint32_t s=0;s<kSlots;s++)
+            for(uint32_t k=0;k<kMaxFactor-1;k++)
+                if(c->acquire_pending[s][k])
+                    vkWaitForFences(c->device,1,&c->acquire_fence[s][k],VK_TRUE,UINT64_MAX);
         if (c->fg) fg_context_destroy(c->fg);
         free_image(c->device, &c->history[0]);
         free_image(c->device, &c->history[1]);
@@ -309,6 +318,7 @@ void free_chain(Chain *c)
             if (c->fence[s]) vkDestroyFence(c->device, c->fence[s], nullptr);
             for (uint32_t k = 0; k < kMaxFactor - 1; k++) {
                 if (c->acquired[s][k]) vkDestroySemaphore(c->device, c->acquired[s][k], nullptr);
+                if (c->acquire_fence[s][k]) vkDestroyFence(c->device, c->acquire_fence[s][k], nullptr);
             }
         }
         for (auto semaphore : c->ready)
@@ -362,9 +372,13 @@ bool setup_chain(Chain *c)
         if (vkCreateSemaphore(c->device, &semaphore, nullptr, &c->ready[i]) != VK_SUCCESS) return false;
     for (uint32_t s = 0; s < kSlots; s++) {
         if (vkCreateFence(c->device, &fence, nullptr, &c->fence[s]) != VK_SUCCESS) return false;
-        for (uint32_t k = 0; k < c->factor - 1; k++)
+        for (uint32_t k = 0; k < c->factor - 1; k++) {
             if (vkCreateSemaphore(c->device, &semaphore, nullptr, &c->acquired[s][k]) != VK_SUCCESS)
                 return false;
+            VkFenceCreateInfo acquisition{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            if (vkCreateFence(c->device,&acquisition,nullptr,&c->acquire_fence[s][k])!=VK_SUCCESS)
+                return false;
+        }
     }
     fprintf(stderr, "pw_framegen: swapchain %ux%u, %u images, factor %u, %s%s\n", c->extent.width,
             c->extent.height, c->image_count, c->factor, c->method == FG_METHOD_NEURAL ? "neural" : "blend",
@@ -730,10 +744,18 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
 
     uint32_t generate = c->have_prev ? c->factor - 1 : 0, targets[kMaxFactor - 1];
     for (uint32_t k = 0; k < generate; k++) {
+        if(c->acquire_pending[s][k]) {
+            result=vkWaitForFences(c->device,1,&c->acquire_fence[s][k],VK_TRUE,UINT64_MAX);
+            if(result!=VK_SUCCESS) return fail(result);
+            c->acquire_pending[s][k]=false;
+        }
+        result=vkResetFences(c->device,1,&c->acquire_fence[s][k]);
+        if(result!=VK_SUCCESS) return fail(result);
         VkResult acquired = vkAcquireNextImageKHR(c->device, c->handle, 0, c->acquired[s][k],
-                                                  VK_NULL_HANDLE, &targets[k]);
+                                                  c->acquire_fence[s][k], &targets[k]);
         if (acquired == VK_NOT_READY || acquired == VK_TIMEOUT) { generate = k; break; }
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) return fail(acquired);
+        c->acquire_pending[s][k]=true;
         if (targets[k] >= c->image_count) return fail(VK_ERROR_OUT_OF_DATE_KHR);
     }
 

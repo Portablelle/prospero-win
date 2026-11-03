@@ -22,11 +22,17 @@ void fg_record_generate(fg_context*,VkCommandBuffer,uint32_t,fg_method,const fg_
 
 static unsigned waits_seen, fence_waits, all_fences, submits, presents;
 static int target = -1;
-static bool submit_failed, pending[4];
+static bool submit_failed, pending[4], acquisition_pending, acquisition_error;
+static void VKAPI_CALL destroy_semaphore(VkDevice,VkSemaphore semaphore,const VkAllocationCallbacks*)
+{ if((uintptr_t)semaphore==888) assert(!acquisition_pending); }
+static void VKAPI_CALL destroy_fence(VkDevice,VkFence fence,const VkAllocationCallbacks*)
+{ if((uintptr_t)fence==777) assert(!acquisition_pending); }
+static VkResult VKAPI_CALL device_idle(VkDevice) { return VK_SUCCESS; }
 static Chain chain;
 template<typename T> static T handle(uintptr_t n) { return (T)n; }
-static VkResult VKAPI_CALL wait_fences(VkDevice,uint32_t count,const VkFence*,VkBool32,uint64_t)
-{ fence_waits++; if(count==kSlots) all_fences++; return VK_SUCCESS; }
+static VkResult VKAPI_CALL wait_fences(VkDevice,uint32_t count,const VkFence *fences,VkBool32,uint64_t)
+{ for(unsigned i=0;i<count;i++) if((uintptr_t)fences[i]==777) acquisition_pending=false;
+  fence_waits++; if(count==kSlots) all_fences++; return VK_SUCCESS; }
 static VkResult VKAPI_CALL reset_fences(VkDevice,uint32_t,const VkFence*) { return VK_SUCCESS; }
 static VkResult VKAPI_CALL reset_command(VkCommandBuffer,VkCommandBufferResetFlags) { return VK_SUCCESS; }
 static VkResult VKAPI_CALL begin_command(VkCommandBuffer,const VkCommandBufferBeginInfo*) { return VK_SUCCESS; }
@@ -34,10 +40,11 @@ static VkResult VKAPI_CALL end_command(VkCommandBuffer) { return VK_SUCCESS; }
 static void VKAPI_CALL pipeline_barrier(VkCommandBuffer,VkPipelineStageFlags,VkPipelineStageFlags,
  VkDependencyFlags,uint32_t,const VkMemoryBarrier*,uint32_t,const VkBufferMemoryBarrier*,uint32_t,const VkImageMemoryBarrier*) {}
 static void VKAPI_CALL blit_image(VkCommandBuffer,VkImage,VkImageLayout,VkImage,VkImageLayout,uint32_t,const VkImageBlit*,VkFilter) {}
-static VkResult VKAPI_CALL acquire(VkDevice,VkSwapchainKHR,uint64_t timeout,VkSemaphore,VkFence,uint32_t *out)
+static VkResult VKAPI_CALL acquire(VkDevice,VkSwapchainKHR,uint64_t timeout,VkSemaphore,VkFence fence,uint32_t *out)
 {
     assert(timeout==0); /* application-owned images can exhaust the chain */
-    if(target<0) return VK_NOT_READY;
+    if(target<0) return acquisition_error ? VK_ERROR_SURFACE_LOST_KHR : VK_NOT_READY;
+    if((uintptr_t)fence==777) acquisition_pending=true;
     *out=(uint32_t)target; pending[target]=false; target=-1; return VK_SUCCESS;
 }
 static VkResult VKAPI_CALL submit(VkQueue,uint32_t count,const VkSubmitInfo *info,VkFence)
@@ -122,6 +129,21 @@ int main()
     assert(!fresh.pool && fresh.family==UINT32_MAX && pools_destroyed==1);
     allocation_failed=false;
     assert(setup_commands(&fresh,0,handle<VkQueue>(7)) && fresh.cmd[0]);
+    // Acquire one image, then fail the next acquisition before submission.
+    // Queue idle does not retire that WSI signal: destruction must wait its fence.
+    Chain *abandoned=new Chain;
+    abandoned->device=chain.device;abandoned->handle=chain.handle;
+    abandoned->pool=handle<VkCommandPool>(3);abandoned->family=0;abandoned->queue=handle<VkQueue>(5);
+    abandoned->image_count=4;abandoned->factor=3;abandoned->have_prev=true;
+    abandoned->acquire_fence[0][0]=handle<VkFence>(777);
+    abandoned->acquired[0][0]=handle<VkSemaphore>(888);
+    chains[0]=abandoned;info.pSwapchains=&abandoned->handle;
+    target=2;acquisition_error=true;
+    assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_ERROR_SURFACE_LOST_KHR);
+    assert(acquisition_pending && abandoned->acquire_pending[0][0]);
+    chains[0]=nullptr;device_loaded=true;
+    pw_fgvk_DeviceWaitIdle=device_idle;pw_fgvk_DestroySemaphore=destroy_semaphore;pw_fgvk_DestroyFence=destroy_fence;
+    free_chain(abandoned);assert(!acquisition_pending);device_loaded=false;acquisition_error=false;
     real_CreateDevice=create_device;real_DestroyDevice=destroy_device;real_GetDeviceQueue=get_queue;
     for(unsigned i=0;i<12;i++) {
         VkDevice device;VkQueue queue;
