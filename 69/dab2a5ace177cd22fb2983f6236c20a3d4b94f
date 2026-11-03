@@ -1,0 +1,20 @@
+native/pw_hid_ps5.c
+  h_20ba7e744b2e01 81-91,93,98,140,147-148,158-193,196-198
+native/pw_hid_ps5.h
+  h_20ba7e744b2e01 30,43-46
+native/wine64_main.c
+  h_20ba7e744b2e01 906,1475
+tests/test_pw_hid_ps5.c
+  h_20ba7e744b2e01 18-19,30,32,42-43,154,161,169-203,209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69dab2a5ace177cd22fb2983f6236c20a3d4b94f",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
