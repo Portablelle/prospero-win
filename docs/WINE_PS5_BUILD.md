@@ -1121,7 +1121,9 @@ The title runs one game per process (`src/pw_wine_launch.h`):
     MihawkGen's neural interpolation (`third_party/mihawkgen`). It works
     on games that present through a Vulkan 1.3 instance and device (DXVK,
     Zink or Vulkan itself); older API environments pass through unchanged. It
-    adds extra images to the swapchain and forces FIFO, so the console's
+    also requires enabled `swapchainMaintenance1` (EXT/KHR) for presentation
+    fences; otherwise it leaves presentation unchanged. Supported SDR chains
+    get extra images in the swapchain and forces FIFO, so the console's
     60 Hz paces them: `2` takes a 30 fps game to 60. A game that already
     presents 60 is slowed by it. The generated picture needs the next
     frame, so the game's frames are shown about one frame later. Once a

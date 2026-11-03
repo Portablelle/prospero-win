@@ -25,3 +25,9 @@ depth/motion descriptors, without requiring nullDescriptor device support.
 The shim enables these SPIR-V 1.6 shaders only for Vulkan 1.3 instances and
 physical devices. Neural generation additionally requires maintenance4 to
 be enabled on the logical device; otherwise it uses blend.
+
+Safe teardown additionally requires the application to enable the
+`swapchainMaintenance1` device feature and `VK_EXT_swapchain_maintenance1`
+(or its KHR alias). Otherwise swapchain creation passes through unchanged.
+The shim does not silently add device features to the application's request.
+See [Khronos' semaphore lifetime guide](https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html).

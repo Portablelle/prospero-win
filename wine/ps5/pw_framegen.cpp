@@ -89,6 +89,8 @@ struct Chain {
     VkSemaphore ready[kMaxImages]{}, acquired[kSlots][kMaxFactor - 1]{};
     VkFence acquire_fence[kSlots][kMaxFactor - 1]{};
     bool acquire_pending[kSlots][kMaxFactor - 1]{};
+    VkFence present_fence[kMaxImages]{};
+    bool present_pending[kMaxImages]{};
     bool failed = false;
     uint32_t slot = 0;
     /* the last second's counts, and the one being counted */
@@ -106,7 +108,7 @@ pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 int factor_setting = -1, hud_setting = -1;
 VkInstance instance_seen = VK_NULL_HANDLE;
 bool device_loaded = false;
-struct { VkDevice device; VkPhysicalDevice physical; bool maintenance4; bool spirv16; } devices[8];
+struct { VkDevice device; VkPhysicalDevice physical; bool maintenance4; bool spirv16; bool present_fences; } devices[8];
 struct { VkInstance handle; uint32_t version; } instances[16];
 struct { VkPhysicalDevice handle; VkInstance instance; bool spirv16; } physicals[64];
 struct { VkQueue queue; uint32_t family; VkDevice device; } queues[32];
@@ -190,6 +192,36 @@ bool maintenance4_enabled(const VkDeviceCreateInfo *info)
             return value.maintenance4==VK_TRUE;
         }
         feature=header.pNext;
+    }
+    return false;
+}
+
+bool present_fences_enabled(const VkDeviceCreateInfo *info)
+{
+    if(!info) return false;
+    bool extension=false;
+    for(uint32_t i=0;i<info->enabledExtensionCount;i++)
+        if(!strcmp(info->ppEnabledExtensionNames[i],"VK_EXT_swapchain_maintenance1") ||
+           !strcmp(info->ppEnabledExtensionNames[i],"VK_KHR_swapchain_maintenance1")) extension=true;
+    if(!extension) return false;
+    const void *feature=info->pNext;
+    while(feature) {
+        VkBaseInStructure header;memcpy(&header,feature,sizeof(header));
+        if(header.sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT) {
+            VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT value;
+            memcpy(&value,feature,sizeof(value));return value.swapchainMaintenance1==VK_TRUE;
+        }
+        feature=header.pNext;
+    }
+    return false;
+}
+bool caller_present_fence(const VkPresentInfoKHR *info)
+{
+    const void *next=info->pNext;
+    while(next) {
+        VkBaseInStructure header;memcpy(&header,next,sizeof(header));
+        if(header.sType==VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT) return true;
+        next=header.pNext;
     }
     return false;
 }
@@ -307,6 +339,11 @@ void free_chain(Chain *c)
             for(uint32_t k=0;k<kMaxFactor-1;k++)
                 if(c->acquire_pending[s][k])
                     vkWaitForFences(c->device,1,&c->acquire_fence[s][k],VK_TRUE,UINT64_MAX);
+        // Unlike queue/device idle, maintenance1 presentation fences retire
+        // the presentation engine's references to ready semaphores.
+        for(uint32_t i=0;i<c->image_count;i++)
+            if(c->present_pending[i])
+                vkWaitForFences(c->device,1,&c->present_fence[i],VK_TRUE,UINT64_MAX);
         if (c->fg) fg_context_destroy(c->fg);
         free_image(c->device, &c->history[0]);
         free_image(c->device, &c->history[1]);
@@ -321,6 +358,8 @@ void free_chain(Chain *c)
                 if (c->acquire_fence[s][k]) vkDestroyFence(c->device, c->acquire_fence[s][k], nullptr);
             }
         }
+        for(auto fence:c->present_fence)
+            if(fence) vkDestroyFence(c->device,fence,nullptr);
         for (auto semaphore : c->ready)
             if (semaphore) vkDestroySemaphore(c->device, semaphore, nullptr);
         if (c->pool) vkDestroyCommandPool(c->device, c->pool, nullptr);
@@ -368,8 +407,11 @@ bool setup_chain(Chain *c)
     VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    for (uint32_t i = 0; i < c->image_count; i++)
+    for (uint32_t i = 0; i < c->image_count; i++) {
         if (vkCreateSemaphore(c->device, &semaphore, nullptr, &c->ready[i]) != VK_SUCCESS) return false;
+        VkFenceCreateInfo presentation{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        if(vkCreateFence(c->device,&presentation,nullptr,&c->present_fence[i])!=VK_SUCCESS) return false;
+    }
     for (uint32_t s = 0; s < kSlots; s++) {
         if (vkCreateFence(c->device, &fence, nullptr, &c->fence[s]) != VK_SUCCESS) return false;
         for (uint32_t k = 0; k < c->factor - 1; k++) {
@@ -593,7 +635,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateDevice(VkPhysicalDevice physical, const 
     if (result == VK_SUCCESS) {
         pthread_mutex_lock(&lock);
         for (auto &d : devices)
-            if (!d.device) { d.device = *device; d.physical = physical; d.maintenance4 = maintenance4_enabled(info); d.spirv16 = spirv16_of(physical); break; }
+            if (!d.device) { d.device = *device; d.physical = physical; d.maintenance4 = maintenance4_enabled(info); d.spirv16 = spirv16_of(physical); d.present_fences = present_fences_enabled(info); break; }
         pthread_mutex_unlock(&lock);
     }
     return result;
@@ -635,7 +677,11 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateSwapchainKHR(VkDevice device, const VkSw
     VkPhysicalDevice physical=physical_of(device);
     VkInstance instance=instance_of(physical);
     bool compatible=false;
-    for(auto &entry:devices) if(entry.device==device) compatible=entry.spirv16;
+    for(auto &entry:devices) if(entry.device==device) {
+        compatible=entry.spirv16 && entry.present_fences;
+        if(entry.spirv16 && !entry.present_fences)
+            fprintf(stderr,"pw_framegen: swapchainMaintenance1 not enabled: presentation unchanged\n");
+    }
     pthread_mutex_unlock(&lock);
     auto surface_caps=(PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)
         vk_icdGetInstanceProcAddr(instance,"vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
@@ -697,6 +743,26 @@ VKAPI_ATTR void VKAPI_CALL fg_DestroySwapchainKHR(VkDevice device, VkSwapchainKH
     real_DestroySwapchainKHR(device, handle, allocator);
 }
 
+VkResult present_owned(Chain *c,VkQueue queue,const VkPresentInfoKHR *info,uint32_t image)
+{
+    if(c->present_pending[image]) {
+        VkResult result=vkWaitForFences(c->device,1,&c->present_fence[image],VK_TRUE,UINT64_MAX);
+        if(result!=VK_SUCCESS) return result;
+        c->present_pending[image]=false;
+    }
+    VkResult result=vkResetFences(c->device,1,&c->present_fence[image]);
+    if(result!=VK_SUCCESS) return result;
+    VkSwapchainPresentFenceInfoEXT fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
+    fence.pNext=info->pNext;fence.swapchainCount=1;fence.pFences=&c->present_fence[image];
+    VkPresentInfoKHR present=*info;present.pNext=&fence;
+    result=real_QueuePresentKHR(queue,&present);
+    // WSI rejection (out-of-date/surface-lost) still enqueues its waits and
+    // fence. Memory failures enqueue nothing; device loss permits teardown.
+    c->present_pending[image]=result!=VK_ERROR_OUT_OF_HOST_MEMORY &&
+        result!=VK_ERROR_OUT_OF_DEVICE_MEMORY && result!=VK_ERROR_DEVICE_LOST;
+    return result;
+}
+
 /* One submission for the program's frame: copy it aside, then make and draw
  * each picture between it and the previous one into an acquired image. The
  * pictures are presented first, then the program's frame. */
@@ -708,6 +774,13 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     if (c && c->failed) {
         pthread_mutex_unlock(&lock);
         return VK_ERROR_OUT_OF_DATE_KHR;
+    }
+    // A caller-provided presentation fence must keep its original signal
+    // semantics. Do not add a second same-type structure to its pNext chain.
+    if(c && caller_present_fence(info)) {
+        c->have_prev=false;
+        pthread_mutex_unlock(&lock);
+        return real_QueuePresentKHR(queue,info);
     }
     if (!c || !setup_commands(c, family_of(queue), queue)) {
         bool failed=c && c->failed;
@@ -853,7 +926,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
         picture.swapchainCount = 1;
         picture.pSwapchains = &c->handle;
         picture.pImageIndices = &targets[k];
-        VkResult shown = real_QueuePresentKHR(queue, &picture);
+        VkResult shown = present_owned(c,queue,&picture,targets[k]);
         presented += shown == VK_SUCCESS || shown == VK_SUBOPTIMAL_KHR;
         if (shown != VK_SUCCESS && shown != VK_SUBOPTIMAL_KHR) c->failed = true;
     }
@@ -863,7 +936,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     c->cur ^= 1;
     c->have_prev = true;
     count_frame(c, presented);
-    result = real_QueuePresentKHR(queue, &real);
+    result = present_owned(c,queue,&real,info->pImageIndices[0]);
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) c->failed = true;
     pthread_mutex_unlock(&lock);
     return result;

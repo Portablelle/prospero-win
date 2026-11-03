@@ -24,14 +24,18 @@ static unsigned waits_seen, fence_waits, all_fences, submits, presents;
 static int target = -1;
 static bool submit_failed, pending[4], acquisition_pending, acquisition_error;
 static void VKAPI_CALL destroy_semaphore(VkDevice,VkSemaphore semaphore,const VkAllocationCallbacks*)
-{ if((uintptr_t)semaphore==888) assert(!acquisition_pending); }
+{ if((uintptr_t)semaphore==888) assert(!acquisition_pending);
+  if((uintptr_t)semaphore>=100 && (uintptr_t)semaphore<104) assert(!pending[(uintptr_t)semaphore-100]); }
 static void VKAPI_CALL destroy_fence(VkDevice,VkFence fence,const VkAllocationCallbacks*)
 { if((uintptr_t)fence==777) assert(!acquisition_pending); }
 static VkResult VKAPI_CALL device_idle(VkDevice) { return VK_SUCCESS; }
 static Chain chain;
 template<typename T> static T handle(uintptr_t n) { return (T)n; }
 static VkResult VKAPI_CALL wait_fences(VkDevice,uint32_t count,const VkFence *fences,VkBool32,uint64_t)
-{ for(unsigned i=0;i<count;i++) if((uintptr_t)fences[i]==777) acquisition_pending=false;
+{ for(unsigned i=0;i<count;i++) {
+      if((uintptr_t)fences[i]==777) acquisition_pending=false;
+      if((uintptr_t)fences[i]>=600 && (uintptr_t)fences[i]<604) pending[(uintptr_t)fences[i]-600]=false;
+  }
   fence_waits++; if(count==kSlots) all_fences++; return VK_SUCCESS; }
 static VkResult VKAPI_CALL reset_fences(VkDevice,uint32_t,const VkFence*) { return VK_SUCCESS; }
 static VkResult VKAPI_CALL reset_command(VkCommandBuffer,VkCommandBufferResetFlags) { return VK_SUCCESS; }
@@ -96,7 +100,10 @@ int main()
     chain.queue=handle<VkQueue>(5);
     chain.pool=handle<VkCommandPool>(3);chain.family=0;chain.factor=3;chain.have_prev=true;
     chain.image_count=4;chain.extent={32,32};
-    for(unsigned i=0;i<4;i++) chain.ready[i]=handle<VkSemaphore>(100+i);
+    for(unsigned i=0;i<4;i++) {
+        chain.ready[i]=handle<VkSemaphore>(100+i);
+        chain.present_fence[i]=handle<VkFence>(600+i);
+    }
     chains[0]=&chain;
     VkSemaphore app_waits[20];for(unsigned i=0;i<20;i++)app_waits[i]=handle<VkSemaphore>(200+i);
     uint32_t image=0;VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -137,13 +144,16 @@ int main()
     abandoned->image_count=4;abandoned->factor=3;abandoned->have_prev=true;
     abandoned->acquire_fence[0][0]=handle<VkFence>(777);
     abandoned->acquired[0][0]=handle<VkSemaphore>(888);
+    abandoned->ready[3]=handle<VkSemaphore>(103);
+    abandoned->present_fence[3]=handle<VkFence>(603);
+    abandoned->present_pending[3]=true;pending[3]=true;
     chains[0]=abandoned;info.pSwapchains=&abandoned->handle;
     target=2;acquisition_error=true;
     assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_ERROR_SURFACE_LOST_KHR);
     assert(acquisition_pending && abandoned->acquire_pending[0][0]);
     chains[0]=nullptr;device_loaded=true;
     pw_fgvk_DeviceWaitIdle=device_idle;pw_fgvk_DestroySemaphore=destroy_semaphore;pw_fgvk_DestroyFence=destroy_fence;
-    free_chain(abandoned);assert(!acquisition_pending);device_loaded=false;acquisition_error=false;
+    free_chain(abandoned);assert(!acquisition_pending && !pending[3]);device_loaded=false;acquisition_error=false;
     real_CreateDevice=create_device;real_DestroyDevice=destroy_device;real_GetDeviceQueue=get_queue;
     for(unsigned i=0;i<12;i++) {
         VkDevice device;VkQueue queue;
@@ -163,7 +173,7 @@ int main()
     instances[0]={handle<VkInstance>(4),VK_API_VERSION_1_3};
     remember_physical(instances[0].handle,handle<VkPhysicalDevice>(50));
     assert(spirv16_of(handle<VkPhysicalDevice>(50)));
-    devices[0]={handle<VkDevice>(1),handle<VkPhysicalDevice>(50),false,true};
+    devices[0]={handle<VkDevice>(1),handle<VkPhysicalDevice>(50),false,true,true};
     capabilities.maxImageCount=2;
     capabilities.supportedUsageFlags=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     recreate.minImageCount=2;
@@ -197,5 +207,13 @@ int main()
     VkPhysicalDeviceMaintenance4Features extension{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES};
     device_info.pNext=&extension;extension.maintenance4=VK_TRUE;
     assert(maintenance4_enabled(&device_info));
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT};
+    const char *enabled[]={"VK_EXT_swapchain_maintenance1"};
+    device_info.pNext=&maintenance;device_info.enabledExtensionCount=1;device_info.ppEnabledExtensionNames=enabled;
+    assert(!present_fences_enabled(&device_info));maintenance.swapchainMaintenance1=VK_TRUE;
+    assert(present_fences_enabled(&device_info));
+    device_info.enabledExtensionCount=0;assert(!present_fences_enabled(&device_info));
+    VkSwapchainPresentFenceInfoEXT app_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
+    info.pNext=&app_fence;assert(caller_present_fence(&info));info.pNext=nullptr;
     puts("framegen: nonblocking acquisition, all waits, image-owned semaphores, failed submit retirement and device reuse passed");
 }

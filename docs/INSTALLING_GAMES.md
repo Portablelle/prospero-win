@@ -288,6 +288,8 @@ the frame-rate counter a game shows in the top-left corner by default, and
 the game.
 `refresh` and `opengl_thread` belonged to the old PS5 OpenGL SDK; they are
 still accepted and have no effect.
+Generation requires a Vulkan 1.3 SDR chain and enabled swapchain-maintenance
+presentation fences; unsupported configurations keep ordinary presentation.
 
 For `graphics: opengl`, pass `--mesa-zink DIR` to `pw_install.py`, naming a
 local output directory from the pinned Mesa WGL/Zink builder that contains

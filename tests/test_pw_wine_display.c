@@ -123,6 +123,11 @@ static void test_inputs(void)
     buttons.held=0;
     assert(pw_wine_game_inputs(&buttons,&input,0,CROSS,CROSS,events,8)==2);
     assert(events[0].down && !events[1].down && !buttons.held);
+    assert(pw_wine_game_inputs(&buttons,&input,CROSS,CROSS,0,events,8)==1);
+    assert(pw_wine_game_inputs(&buttons,&input,CROSS,CROSS,CROSS,events,8)==2);
+    assert(!events[0].down && events[1].down && buttons.held==CROSS);
+    assert(pw_wine_game_inputs(&buttons,&input,CROSS|R2,R2,0,events,8)==0);
+    assert(pw_wine_game_inputs(&buttons,&input,CROSS|R2,CROSS,CROSS,events,8)==0);
 
 }
 
