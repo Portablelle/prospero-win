@@ -1,5 +1,5 @@
 From: Prospero Win local fixes <prospero-win@local>
-Subject: [PATCH] server: preserve directory identity across backing-path renames
+Subject: [PATCH] server: preallocate identity-safe backing-path rename transactions
 
 --- a/server/fd.c
 +++ b/server/fd.c
@@ -212,17 +212,28 @@ Subject: [PATCH] server: preserve directory identity across backing-path renames
  
      PS5_UNPARK_OR_RETURN( fd );
      if (!fd->inode || !fd->unix_name)
-@@ -3193,6 +3312,9 @@
+@@ -3177,6 +3296,10 @@
+         /* rename() cannot replace files with directories */
+         if (create_link || S_ISDIR( st2.st_mode ))
+         {
++#ifdef PS5_PARK_DIRECTORIES
++            /* No new allocation may fail after removing a replacement. */
++            if (!create_link && !(renames = ps5_prepare_rename( fd, name ))) goto failed;
++#endif
+             if (unlink( name ))
+             {
+                 file_set_error();
+@@ -3193,6 +3316,9 @@
          return;
      }
  
 +#ifdef PS5_PARK_DIRECTORIES
-+    if (!(renames = ps5_prepare_rename( fd, name ))) goto failed;
++    if (!renames && !(renames = ps5_prepare_rename( fd, name ))) goto failed;
 +#endif
      if (rename( fd->unix_name, name ))
      {
          file_set_error();
-@@ -3211,30 +3333,21 @@
+@@ -3211,30 +3337,21 @@
  
      free( fd->nt_name );
      fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );

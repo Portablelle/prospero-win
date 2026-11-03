@@ -199,6 +199,15 @@ int main()
     unsigned attempts_before=swapchain_attempts;
     assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
     assert(swapchain_attempts==attempts_before+1); // unsupported HDR passes through once
+    recreate.imageFormat=VK_FORMAT_R8G8B8A8_UNORM;
+    VkPresentModeKHR allowed=VK_PRESENT_MODE_MAILBOX_KHR;
+    VkSwapchainPresentModesCreateInfoEXT mode_list{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT};
+    mode_list.presentModeCount=1;mode_list.pPresentModes=&allowed;recreate.pNext=&mode_list;
+    attempts_before=swapchain_attempts;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==attempts_before+1);recreate.pNext=nullptr;
+    VkSwapchainPresentModeInfoEXT per_present{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT};
+    assert(chain_has(&per_present,VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT));
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     VkPhysicalDeviceVulkan13Features core{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     device_info.pNext=&core;
@@ -214,6 +223,6 @@ int main()
     assert(present_fences_enabled(&device_info));
     device_info.enabledExtensionCount=0;assert(!present_fences_enabled(&device_info));
     VkSwapchainPresentFenceInfoEXT app_fence{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
-    info.pNext=&app_fence;assert(caller_present_fence(&info));info.pNext=nullptr;
+    info.pNext=&app_fence;assert(chain_has(info.pNext,VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT));info.pNext=nullptr;
     puts("framegen: nonblocking acquisition, all waits, image-owned semaphores, failed submit retirement and device reuse passed");
 }

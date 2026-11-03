@@ -215,12 +215,11 @@ bool present_fences_enabled(const VkDeviceCreateInfo *info)
     }
     return false;
 }
-bool caller_present_fence(const VkPresentInfoKHR *info)
+bool chain_has(const void *next,VkStructureType type)
 {
-    const void *next=info->pNext;
     while(next) {
         VkBaseInStructure header;memcpy(&header,next,sizeof(header));
-        if(header.sType==VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT) return true;
+        if(header.sType==type) return true;
         next=header.pNext;
     }
     return false;
@@ -691,7 +690,9 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateSwapchainKHR(VkDevice device, const VkSw
     bool sdr=info->imageColorSpace==VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
         (info->imageFormat==VK_FORMAT_R8G8B8A8_UNORM || info->imageFormat==VK_FORMAT_B8G8R8A8_UNORM ||
          info->imageFormat==VK_FORMAT_R8G8B8A8_SRGB || info->imageFormat==VK_FORMAT_B8G8R8A8_SRGB);
-    if(!compatible || !sdr || !surface_caps ||
+    // Dynamic mode lists carry mode-specific capability contracts. Preserve
+    // the caller's request rather than forcing FIFO through that chain.
+    if(!compatible || !sdr || chain_has(info->pNext,VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT) || !surface_caps ||
        surface_caps(physical,info->surface,&caps)!=VK_SUCCESS ||
        (caps.supportedUsageFlags & transfer)!=transfer ||
        info->minImageCount>UINT32_MAX-extra ||
@@ -775,9 +776,10 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
         pthread_mutex_unlock(&lock);
         return VK_ERROR_OUT_OF_DATE_KHR;
     }
-    // A caller-provided presentation fence must keep its original signal
-    // semantics. Do not add a second same-type structure to its pNext chain.
-    if(c && caller_present_fence(info)) {
+    // Caller-owned fences and per-present mode changes keep their original
+    // semantics; these presentations are not split into generated pictures.
+    if(c && (chain_has(info->pNext,VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT) ||
+             chain_has(info->pNext,VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT))) {
         c->have_prev=false;
         pthread_mutex_unlock(&lock);
         return real_QueuePresentKHR(queue,info);

@@ -146,16 +146,34 @@ DIRECTORY_HEADER = r'''
 #include "wine/list.h"
 #define STATUS_OBJECT_NAME_INVALID 1
 #define STATUS_FILE_DELETED 2
+#define STATUS_OBJECT_TYPE_MISMATCH 3
+#define STATUS_OBJECT_PATH_SYNTAX_BAD 4
+#define STATUS_NO_MEMORY 5
+#define STATUS_FILE_IS_A_DIRECTORY 6
+#define STATUS_OBJECT_NAME_COLLISION 7
+#define STATUS_ACCESS_DENIED 8
+#define FILE_RENAME_REPLACE_IF_EXISTS 1
+#define FILE_RENAME_IGNORE_READONLY_ATTRIBUTE 2
+#define PS5_PARK_DIRECTORIES 1
+#define PS5_UNPARK_OR_RETURN(fd) ((void)(fd))
+typedef unsigned int data_size_t;
+struct unicode_str {const void *str;data_size_t len;};
 struct closed_fd {char *unix_name;};
 struct device {dev_t dev;};
-struct inode {struct device *device;ino_t ino;};
+struct inode {struct device *device;ino_t ino;struct list open;};
 struct fd {char *unix_name;struct closed_fd *closed;struct list ps5_directory_entry;
-           struct inode *inode,identity;struct device device;};
+           struct inode *inode,identity;struct device device;
+           int unix_fd,no_fd_status;void *nt_name;data_size_t nt_namelen;};
 static struct list ps5_directories=LIST_INIT(ps5_directories);
 static unsigned fail_alloc, allocs;
 static void set_error(int status){(void)status;}
 static void file_set_error(void){}
 static void *mem_alloc(size_t size){if(++allocs==fail_alloc)return NULL;return malloc(size);}
+static char *dup_fd_name(struct fd *fd,const char *name){(void)fd;(void)name;return NULL;}
+static void *dup_nt_name(struct fd *fd,struct unicode_str name,data_size_t *len){(void)fd;(void)name;*len=0;return NULL;}
+static struct inode *get_inode(dev_t dev,ino_t ino,int fd){(void)dev;(void)ino;(void)fd;return NULL;}
+static void release_object(void *obj){(void)obj;}
+static int is_file_executable(const char *name){(void)name;return 0;}
 '''
 DIRECTORY_TEST = r'''
 static void register_fd(struct fd *fd,struct closed_fd *closed,const char *name)
@@ -193,6 +211,20 @@ int main(void)
     plan=ps5_prepare_rename(&root,blocked);assert(plan);
     assert(rename(root.unix_name,blocked)==-1);ps5_finish_rename(plan,0);
     assert(!strcmp(root.unix_name,next)&&!access(one.unix_name,F_OK));
+    // Inject every plan allocation failure before replacing a regular file
+    // with a directory. The destination must survive each rejected rename.
+    char victim[PATH_MAX];snprintf(victim,sizeof(victim),"%s/victim",temp);
+    int victim_fd=open(victim,O_WRONLY|O_CREAT,0600);assert(victim_fd>=0);
+    assert(write(victim_fd,"keep",4)==4);close(victim_fd);
+    root.unix_fd=open(root.unix_name,O_RDONLY|O_DIRECTORY);assert(root.unix_fd>=0);
+    root.nt_name=NULL;root.nt_namelen=0;
+    for(unsigned fail=2;fail<=8;fail++) {
+        allocs=0;fail_alloc=fail;
+        set_fd_name(&root,NULL,victim,strlen(victim),(struct unicode_str){0},0,FILE_RENAME_REPLACE_IF_EXISTS);
+        assert(!stat(victim,&actual) && S_ISREG(actual.st_mode));
+        assert(!access(root.unix_name,F_OK));
+    }
+    fail_alloc=0;close(root.unix_fd);assert(!unlink(victim));
     // An unlinked open predecessor must not follow a replacement's rename.
     char reused[PATH_MAX],moved[PATH_MAX];
     snprintf(reused,sizeof(reused),"%s/reused",temp);snprintf(moved,sizeof(moved),"%s/moved",temp);
@@ -232,7 +264,7 @@ def main():
     fd = (source/'server/fd.c').read_text()
     start = fd.index('struct ps5_rename_path {')
     end = fd.index('\n#endif', start)
-    directory = DIRECTORY_HEADER + function(fd, 'static char *realpath_dup(') + fd[start:end] + DIRECTORY_TEST
+    directory = DIRECTORY_HEADER + function(fd, 'static char *realpath_dup(') + fd[start:end] + function(fd, 'static void set_fd_name(') + DIRECTORY_TEST
     with tempfile.TemporaryDirectory() as temp:
         for name, text in (('stack', stack), ('directory', directory)):
             c = Path(temp)/(name+'.c')
