@@ -1,0 +1,20 @@
+tests/test_pw_framegen.cpp
+  h_20ba7e744b2e01 202-210,226
+tests/test_wine_review_helpers.py
+  h_20ba7e744b2e01 149-160,163,165-166,172-176,214-227,267
+wine/patches/0998-server-update-parked-descendants-on-rename.patch
+  h_20ba7e744b2e01 2,215-226,231,236
+wine/ps5/pw_framegen.cpp
+  h_20ba7e744b2e01 218,222,693-695,779-782
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b482902d6bdd2dc64b09de71d4443ed09e8bd9aa",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
