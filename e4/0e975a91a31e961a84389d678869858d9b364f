@@ -1,0 +1,16 @@
+tests/test_wine_review_helpers.py
+  h_20ba7e744b2e01 148,150-153,162-167,196-212
+wine/patches/0998-server-update-parked-descendants-on-rename.patch
+  h_20ba7e744b2e01 2,55,83,88-92,114-117,140,167,177,205,215,225
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e40e975a91a31e961a84389d678869858d9b364f",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
