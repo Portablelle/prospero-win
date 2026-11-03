@@ -1,0 +1,26 @@
+docs/INSTALLING_GAMES.md
+  h_20ba7e744b2e01 291-292
+docs/WINE_PS5_BUILD.md
+  h_20ba7e744b2e01 1124-1126
+native/pw_wine_display.c
+  h_20ba7e744b2e01 167-168
+tests/test_pw_framegen.cpp
+  h_20ba7e744b2e01 27-28,35-38,103-106,147-149,156,176,210-217
+tests/test_pw_wine_display.c
+  h_20ba7e744b2e01 126-130
+third_party/mihawkgen/README.md
+  h_20ba7e744b2e01 28-33
+wine/ps5/pw_framegen.cpp
+  h_20ba7e744b2e01 92-93,111,199-228,342-346,361-362,410,412-414,638,680-684,746-765,778-784,929,939
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3748b611deca9025593e037d1a5770958a032bae",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
