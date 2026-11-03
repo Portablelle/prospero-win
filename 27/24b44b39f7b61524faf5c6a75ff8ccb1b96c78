@@ -1,0 +1,44 @@
+Makefile
+  h_20ba7e744b2e01 302-311
+PUBLICATION_ALLOWLIST.txt
+  h_20ba7e744b2e01 648-659
+docs/DEBUGGING_GUIDE.md
+  h_20ba7e744b2e01 658-659
+docs/WINE_PS5_BUILD.md
+  h_20ba7e744b2e01 1599-1600
+native/pw_launcher_settings.c
+  h_20ba7e744b2e01 5,55,78,102,105,143-150
+native/pw_wine_display.c
+  h_20ba7e744b2e01 5-16,113-117,119-137,144-151,244,248-250
+native/pw_wine_display.h
+  h_20ba7e744b2e01 24-29
+native/wine64_main.c
+  h_20ba7e744b2e01 396-403,1351-1352,1493,1644,1666,1668-1669,1725,1731
+tests/test_pw_framegen.cpp
+  h_20ba7e744b2e01 1-101
+tests/test_pw_launcher_settings.c
+  h_20ba7e744b2e01 15-40,45
+tests/test_pw_wine_display.c
+  h_20ba7e744b2e01 394-418,422
+tests/wine_subpage_protect.c
+  h_20ba7e744b2e01 14,24-28,133-148
+third_party/mihawkgen/README.md
+  h_20ba7e744b2e01 21-23
+third_party/mihawkgen/src/fg_vulkan.cpp
+  h_20ba7e744b2e01 271-279
+wine/patches/0997-ntdll-multi-page-step-and-user-trap.patch
+  h_20ba7e744b2e01 1-103
+wine/ps5/pw_framegen.cpp
+  h_20ba7e744b2e01 26,85-89,107,111,172,175,278-279,291,323-324,326,328,458-470,475,483,543-567,569-571,575,577-579,585-588,640-641,643,645,653-654,657-658,663-667,672,678,682,686-687,689,701
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2724b44b39f7b61524faf5c6a75ff8ccb1b96c78",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
