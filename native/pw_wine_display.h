@@ -57,12 +57,10 @@ int pw_wine_frame_box_put(PwWineFrameBox *box, const void *bgra, uint32_t width,
 int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
                            size_t capacity, PwPresentView *view);
 
-/* Wine input for one pad batch's edges under a profile's bindings: a
- * release for each bound button in released, then a press for each in
- * pressed, as a key or a mouse button. Returns how many were written (at
- * most max). If the buffer cannot hold the full batch, returns 0 without
- * changing the button state. */
-size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input, uint32_t pressed, uint32_t released,
+/* Translate a batch with its final held mask and accumulated edges. Bindings
+ * that share a key/button are aggregated; a complete tap between samples
+ * still emits down/up. A full output buffer leaves the state unchanged. */
+size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input, uint32_t held, uint32_t pressed, uint32_t released,
                            PwWineInput *out, size_t max);
 
 /* Digital key emulation for one analog stick. Direction bits are retained

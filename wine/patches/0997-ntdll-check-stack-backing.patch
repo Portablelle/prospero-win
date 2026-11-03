@@ -1,5 +1,5 @@
 From: Prospero Win local fixes <prospero-win@local>
-Subject: [PATCH] ntdll: propagate stack backing failures before publishing metadata
+Subject: [PATCH] ntdll: commit stack growth as one protection transaction
 
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
@@ -31,60 +31,70 @@ Subject: [PATCH] ntdll: propagate stack backing failures before publishing metad
      }
      VIRTUAL_DEBUG_DUMP_VIEW( view );
  
-@@ -5105,22 +5115,35 @@
+@@ -5105,24 +5115,27 @@
  /***********************************************************************
   *           grow_thread_stack
   */
-+/* Publish commitment metadata only after backing/protection succeeds.
-+ * A partially applied backend operation is restored using the old metadata. */
-+static BOOL commit_stack_range( void *base, SIZE_T size, BYTE set, BYTE clear )
-+{
-+    if (mprotect_range( base, size, set, clear ))
-+    {
-+        mprotect_range( base, size, 0, 0 );
-+        return FALSE;
-+    }
-+    set_page_vprot_bits( base, size, set, clear );
-+    return TRUE;
-+}
-+
++/* All protection changes are prepared against the old metadata. Only
++ * after both the data range and new guard succeed is either published. */
  static NTSTATUS grow_thread_stack( struct thread_data *data, char *page, struct thread_stack_info *stack_info )
  {
      NTSTATUS ret = 0;
- 
+-
 -    set_page_vprot_bits( page, host_page_size, VPROT_COMMITTED, VPROT_GUARD );
 -    mprotect_range( page, host_page_size, 0, 0 );
-+    if (!commit_stack_range( page, host_page_size, VPROT_COMMITTED, VPROT_GUARD ))
-+        return STATUS_NO_MEMORY;
++    char *guard = NULL, *end = max( stack_info->limit, page + host_page_size );
++    SIZE_T size;
++
      if (page >= stack_info->start + host_page_size + stack_info->guaranteed)
-     {
+-    {
 -        set_page_vprot_bits( page - host_page_size, host_page_size, VPROT_COMMITTED | VPROT_GUARD, 0 );
 -        mprotect_range( page - host_page_size, host_page_size, 0, 0 );
-+        if (!commit_stack_range( page - host_page_size, host_page_size, VPROT_COMMITTED | VPROT_GUARD, 0 ))
-+            return STATUS_NO_MEMORY;
-     }
-     else  /* inside guaranteed space -> overflow exception */
+-    }
+-    else  /* inside guaranteed space -> overflow exception */
++        guard = page - host_page_size;
++    else
      {
          page = stack_info->start + host_page_size;
 -        set_page_vprot_bits( page, stack_info->guaranteed, VPROT_COMMITTED, VPROT_GUARD );
 -        mprotect_range( page, stack_info->guaranteed, 0, 0 );
-+        if (!commit_stack_range( page, stack_info->guaranteed, VPROT_COMMITTED, VPROT_GUARD ))
-+            return STATUS_NO_MEMORY;
++        end = max( end, page + stack_info->guaranteed );
          ret = STATUS_STACK_OVERFLOW;
      }
++    size = end - page;
++    if (mprotect_range( page, size, VPROT_COMMITTED, VPROT_GUARD )) goto failed;
++    if (guard && mprotect_range( guard, host_page_size, VPROT_COMMITTED | VPROT_GUARD, 0 )) goto failed;
++    set_page_vprot_bits( page, size, VPROT_COMMITTED, VPROT_GUARD );
++    if (guard) set_page_vprot_bits( guard, host_page_size, VPROT_COMMITTED | VPROT_GUARD, 0 );
      if (stack_info->is_wow)
-@@ -5162,8 +5185,8 @@
+     {
+         WOW_TEB *wow_teb = get_wow_teb( data->teb );
+@@ -5130,6 +5143,15 @@
+     }
+     else data->teb->Tib.StackLimit = page;
+     return ret;
++failed:
++    /* Restore every touched range, including the range that failed. Old
++     * metadata is intact. A failed rollback cannot safely resume a thread. */
++    {
++        int restore_data = mprotect_range( page, size, 0, 0 );
++        int restore_guard = guard ? mprotect_range( guard, host_page_size, 0, 0 ) : 0;
++        if (restore_data || restore_guard) abort_thread(1);
++    }
++    return STATUS_NO_MEMORY;
+ }
+ 
+ 
+@@ -5162,8 +5184,6 @@
   */
  static NTSTATUS grow_thread_stack_to( struct thread_data *data, char *page, struct thread_stack_info *stack_info )
  {
 -    set_page_vprot_bits( page, stack_info->limit - page, VPROT_COMMITTED, VPROT_GUARD );
 -    mprotect_range( page, stack_info->limit - page, 0, 0 );
-+    if (!commit_stack_range( page, stack_info->limit - page, VPROT_COMMITTED, VPROT_GUARD ))
-+        return STATUS_NO_MEMORY;
      return grow_thread_stack( data, page, stack_info );
  }
  
-@@ -5274,6 +5297,14 @@
+@@ -5274,6 +5294,14 @@
          mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
          if (get_host_page_vprot( page ) & VPROT_GUARD) grown = grow_thread_stack( data, page, &stack_info );
          else if (is_stack_reserve( data, page, &stack_info )) grown = grow_thread_stack_to( data, page, &stack_info );

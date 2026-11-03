@@ -21,3 +21,7 @@ To update: copy the same three parts of a newer commit and write its hash in
 
 Local adaptation: baseline passes bind valid color views for unused optional
 depth/motion descriptors, without requiring nullDescriptor device support.
+
+The shim enables these SPIR-V 1.6 shaders only for Vulkan 1.3 instances and
+physical devices. Neural generation additionally requires maintenance4 to
+be enabled on the logical device; otherwise it uses blend.

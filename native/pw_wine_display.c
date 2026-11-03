@@ -108,10 +108,10 @@ int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
 }
 
 size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input,
-                           uint32_t pressed, uint32_t released, PwWineInput *out, size_t max)
+                           uint32_t next, uint32_t pressed, uint32_t released, PwWineInput *out, size_t max)
 {
     if (!state || !input || !out) return 0;
-    uint32_t previous = state->held, next = (previous & ~released) | pressed;
+    uint32_t previous = state->held;
     size_t used = 0;
     PwWineInput pending[2*PW_GAME_BUTTON_COUNT];
     for (int down=0; down<=1; down++)
@@ -126,9 +126,15 @@ size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input,
                 }
             if(j<PW_GAME_BUTTON_COUNT) continue;
             int before=!!(previous&mask), after=!!(next&mask);
-            if(before!=after && after==down)
+            /* A complete tap can be batched between samples. Preserve its
+             * two edges without letting it override the final held state. */
+            int tap = !before && !after && (pressed & released & mask);
+            if((before!=after && after==down) || (tap && down))
                 pending[used++]=(PwWineInput){binding->kind==PW_GAME_BIND_KEY?PW_WINE_INPUT_KEY:PW_WINE_INPUT_MOUSE_BUTTON,
                                          binding->code,0,0,(uint32_t)down};
+            if(tap && down) pending[used++]=(PwWineInput){
+                binding->kind==PW_GAME_BIND_KEY?PW_WINE_INPUT_KEY:PW_WINE_INPUT_MOUSE_BUTTON,
+                binding->code,0,0,0};
         }
     if(used>max) return 0;
     memcpy(out,pending,used*sizeof(*out));
@@ -147,20 +153,27 @@ static size_t stick_keys_step(uint8_t *held, uint8_t x, uint8_t y, int connected
     if (!held || !out || !keys) return 0;
     const int axes[4] = {128-(int)y, (int)y-128, 128-(int)x, (int)x-128};
     uint8_t next = 0;
-    size_t count = 0;
     for (unsigned i=0;i<4;i++) {
         uint8_t bit=(uint8_t)(1u<<i);
         if (connected && axes[i]>=((*held & bit)?release:press)) next |= bit;
-        if ((*held ^ next) & bit) count++;
     }
-    if (count > max) return 0; /* never lose an edge when the buffer is full */
-    count=0;
+    PwWineInput pending[4];
+    size_t count=0;
     for(int down=0;down<=1;down++)
         for(unsigned i=0;i<4;i++) {
-            uint8_t bit=(uint8_t)(1u<<i);
-            if (((*held ^ next)&bit) && !!(next&bit)==down)
-                out[count++]=(PwWineInput){PW_WINE_INPUT_KEY,keys[i],0,0,down};
+            unsigned mask=0,j;
+            for(j=0;j<4;j++) {
+                if(keys[j]!=keys[i]) continue;
+                if(j<i) break;
+                mask|=1u<<j;
+            }
+            if(j<4) continue;
+            int before=!!(*held&mask), after=!!(next&mask);
+            if(before!=after && after==down)
+                pending[count++]=(PwWineInput){PW_WINE_INPUT_KEY,keys[i],0,0,down};
         }
+    if(count>max) return 0;
+    memcpy(out,pending,count*sizeof(*out));
     *held=next;
     return count;
 }

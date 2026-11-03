@@ -112,6 +112,7 @@ int main(void)
     calls=0;fail_call=2;
     assert(grow_thread_stack(&data,(char*)arena+10*HOST,&info)==STATUS_NO_MEMORY);
     assert(!(protections[9*HOST/PAGE]&VPROT_COMMITTED));
+    assert(!(protections[10*HOST/PAGE]&VPROT_COMMITTED));
     assert(teb.Tib.StackLimit==arena+12*HOST);
     calls=0;fail_call=0;
     assert(grow_thread_stack_to(&data,(char*)arena+10*HOST,&info)==0);
@@ -197,7 +198,7 @@ def main():
     virtual = (source/'dlls/ntdll/unix/virtual.c').read_text()
     stack = STACK_HEADER + '\n'.join(function(virtual, marker) for marker in (
         'static inline BOOL stack_commit_on_demand(', 'NTSTATUS virtual_alloc_thread_stack(',
-        'static BOOL commit_stack_range(', 'static NTSTATUS grow_thread_stack(',
+        'static NTSTATUS grow_thread_stack(',
         'static NTSTATUS grow_thread_stack_to(', 'static BOOL is_stack_reserve(',
         'void *virtual_setup_exception(')) + STACK_TEST
     fd = (source/'server/fd.c').read_text()

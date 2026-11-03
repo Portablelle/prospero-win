@@ -102,23 +102,27 @@ static void test_inputs(void)
 
     pw_game_input_init(&input);
     assert(pw_game_input_parse((const uint8_t *)preset_text, sizeof(preset_text) - 1, &input) == PW_OK);
-    assert(pw_wine_game_inputs(&buttons, &input, L1 | CROSS | CIRCLE | SQUARE, 0, events, 8) == 2);
+    assert(pw_wine_game_inputs(&buttons, &input, (buttons.held & ~(0)) | (L1 | CROSS | CIRCLE | SQUARE), L1 | CROSS | CIRCLE | SQUARE, 0, events, 8) == 2);
     assert(events[0].type == PW_WINE_INPUT_KEY && events[0].code == 0x20 && events[0].down == 1);
     assert(events[1].code == 'Z' && events[1].down == 1 && !events[1].x && !events[1].y);
 
     /* Releases come first; mouse bindings send buttons; unbound and none send nothing. */
-    assert(pw_wine_game_inputs(&buttons, &input, R2 | L2, L1 | CROSS, events, 8) == 4);
+    assert(pw_wine_game_inputs(&buttons, &input, (buttons.held & ~(L1 | CROSS)) | (R2 | L2), R2 | L2, L1 | CROSS, events, 8) == 4);
     assert(events[0].code == 0x20 && !events[0].down && events[1].code == 'Z' && !events[1].down);
     assert(events[2].type == PW_WINE_INPUT_MOUSE_BUTTON && events[2].code == 1 && events[2].down);
     assert(events[3].type == PW_WINE_INPUT_MOUSE_BUTTON && events[3].code == 0 && events[3].down);
-    assert(pw_wine_game_inputs(&buttons, &input, R1 | L1, 0, events, 1) == 0 && !(buttons.held & (R1|L1)));
-    assert(pw_wine_game_inputs(&buttons, &input, 0, 0, events, 8) == 0);
-    assert(pw_wine_game_inputs(&buttons, NULL, L1, 0, events, 8) == 0 && pw_wine_game_inputs(&buttons, &input, L1, 0, NULL, 8) == 0);
+    assert(pw_wine_game_inputs(&buttons, &input, (buttons.held & ~(0)) | (R1 | L1), R1 | L1, 0, events, 1) == 0 && !(buttons.held & (R1|L1)));
+    assert(pw_wine_game_inputs(&buttons, &input, (buttons.held & ~(0)) | (0), 0, 0, events, 8) == 0);
+    assert(pw_wine_game_inputs(&buttons, NULL, L1, L1, 0, events, 8) == 0 && pw_wine_game_inputs(&buttons, &input, (buttons.held & ~(0)) | (L1), L1, 0, NULL, 8) == 0);
     buttons.held=0;
     input.bindings[0]=(PwGameBinding){CROSS,PW_GAME_BIND_MOUSE,0};
-    assert(pw_wine_game_inputs(&buttons,&input,CROSS|R2,0,events,8)==1);
-    assert(pw_wine_game_inputs(&buttons,&input,0,CROSS,events,8)==0);
-    assert(pw_wine_game_inputs(&buttons,&input,0,R2,events,8)==1 && !events[0].down);
+    assert(pw_wine_game_inputs(&buttons,&input,CROSS|R2,CROSS|R2,0,events,8)==1);
+    assert(pw_wine_game_inputs(&buttons,&input,R2,0,CROSS,events,8)==0);
+    assert(pw_wine_game_inputs(&buttons,&input,0,0,R2,events,8)==1 && !events[0].down);
+
+    buttons.held=0;
+    assert(pw_wine_game_inputs(&buttons,&input,0,CROSS,CROSS,events,8)==2);
+    assert(events[0].down && !events[1].down && !buttons.held);
 
 }
 
@@ -378,6 +382,12 @@ static void test_keyboard_stick(void)
     /* Both axes at once, and the refusals. */
     in.keyboard_stick = PW_GAME_STICK_LEFT;
     assert(pw_wine_keyboard_stick_step(&in, 0x00, 0x00, 1, &state, out, 4) == 2);
+    /* Two directions bound to W share one held key. */
+    state.held=0;
+    in.stick_keys[0]=in.stick_keys[3]='W';
+    assert(pw_wine_keyboard_stick_step(&in,255,0,1,&state,out,4)==1 && out[0].down);
+    assert(pw_wine_keyboard_stick_step(&in,255,128,1,&state,out,4)==0);
+    assert(pw_wine_keyboard_stick_step(&in,128,128,1,&state,out,4)==1 && !out[0].down);
     assert(!pw_wine_keyboard_stick_step(NULL, 0, 0, 1, &state, out, 4));
     assert(!pw_wine_keyboard_stick_step(&in, 0, 0, 1, NULL, out, 4));
     assert(!pw_wine_keyboard_stick_step(&in, 0, 0, 1, &state, NULL, 4));

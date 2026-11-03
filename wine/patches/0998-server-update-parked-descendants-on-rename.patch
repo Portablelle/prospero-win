@@ -1,5 +1,5 @@
 From: Prospero Win local fixes <prospero-win@local>
-Subject: [PATCH] server: preallocate rename paths for parked directory descendants
+Subject: [PATCH] server: track directory duplicates across parent rename
 
 --- a/server/fd.c
 +++ b/server/fd.c
@@ -34,7 +34,25 @@ Subject: [PATCH] server: preallocate rename paths for parked directory descendan
      }
      if (!threshold || ps5_directory_fds <= (unsigned int)threshold) return;
      if (fd->unix_fd == -1 || !fd->inode || !fd->closed || !fd->unix_name || fd->closed->disp_flags ||
-@@ -3080,6 +3083,68 @@
+@@ -2024,6 +2027,17 @@
+         file_set_error();
+         goto failed;
+     }
++#ifdef PS5_PARK_DIRECTORIES
++    /* A duplicate keeps its own absolute name even while its fd is open.
++     * Track it immediately so a parent rename updates that name as well. */
++    if (orig->ps5_counted)
++    {
++        fd->ps5_counted = 1;
++        fd->ps5_park_flags = orig->ps5_park_flags;
++        ps5_directory_fds++;
++        list_add_tail( &ps5_directories, &fd->ps5_directory_entry );
++    }
++#endif
+     return fd;
+ 
+ failed:
+@@ -3080,6 +3094,68 @@
          ((fd->options & FILE_DELETE_ON_CLOSE) ? FILE_DISPOSITION_DELETE : 0);
  }
  
@@ -103,7 +121,7 @@ Subject: [PATCH] server: preallocate rename paths for parked directory descendan
  /* set new name for the fd */
  static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, data_size_t len,
                           struct unicode_str nt_name, int create_link, unsigned int flags )
-@@ -3088,6 +3153,9 @@
+@@ -3088,6 +3164,9 @@
      struct stat st, st2;
      char *name;
      const unsigned int replace = flags & FILE_RENAME_REPLACE_IF_EXISTS;
@@ -113,7 +131,7 @@ Subject: [PATCH] server: preallocate rename paths for parked directory descendan
  
      PS5_UNPARK_OR_RETURN( fd );
      if (!fd->inode || !fd->unix_name)
-@@ -3193,6 +3261,9 @@
+@@ -3193,6 +3272,9 @@
          return;
      }
  
@@ -123,7 +141,7 @@ Subject: [PATCH] server: preallocate rename paths for parked directory descendan
      if (rename( fd->unix_name, name ))
      {
          file_set_error();
-@@ -3211,30 +3282,21 @@
+@@ -3211,30 +3293,21 @@
  
      free( fd->nt_name );
      fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );

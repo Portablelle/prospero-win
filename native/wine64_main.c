@@ -1102,6 +1102,7 @@ int main(int argc, char **argv)
      * i feeds controller i+1. */
     static PwPadPlayers players;
     static uint8_t players_fed[PW_PAD_PLAYERS];
+    uint32_t players_withheld[PW_PAD_PLAYERS] = {0};
     void (*set_pad_at)(uint32_t, const PwWinePad *) = NULL;
     int (*rumble_at)(uint32_t, uint32_t *, uint32_t *) = NULL;
     uint32_t (*pads_wanted)(void) = NULL;
@@ -1649,15 +1650,21 @@ int main(int argc, char **argv)
                 if (!player->opened) {
                     if (players_fed[i]) set_pad_at(i + 1, NULL);
                     players_fed[i] = 0;
+                    players_withheld[i] = 0;
                     continue;
                 }
                 const PwPadPs5 *read = pw_pad_ps5_read(player) == PW_OK ? player : NULL;
-                if (read && (menu_open || osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN)) {
+                int captured = menu_open || osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN;
+                uint32_t buttons = pw_wine_capture_buttons(read ? read->core.previous_buttons : 0,
+                                                          &players_withheld[i], captured);
+                if (read) {
                     idle = *player;
-                    idle.core.previous_buttons = idle.core.pressed_edges = idle.core.released_edges = 0;
+                    idle.core.previous_buttons = buttons;
+                    if (captured) {
                     idle.left_stick.x = idle.left_stick.y = 0x80;
                     idle.right_stick.x = idle.right_stick.y = 0x80;
                     idle.l2 = idle.r2 = 0;
+                    }
                     read = &idle;
                 }
                 set_pad_at(i + 1, pw_wine_game_pad(read, &state) ? &state : NULL);
@@ -1668,7 +1675,7 @@ int main(int argc, char **argv)
             }
         }
         if (pad_read) {
-            size_t count = pw_wine_game_inputs(&button_state, &game_input, seen->core.pressed_edges,
+            size_t count = pw_wine_game_inputs(&button_state, &game_input, seen->core.previous_buttons, seen->core.pressed_edges,
                                                seen->core.released_edges, events,
                                                sizeof(events) / sizeof(events[0]) - 5);
             size_t binding_count = count;
@@ -1709,7 +1716,7 @@ int main(int argc, char **argv)
             }
         } else if (post_input) {
             key_source = PW_INPUT_PAD;
-            size_t releases = pw_wine_game_inputs(&button_state,&game_input,0,button_state.held,
+            size_t releases = pw_wine_game_inputs(&button_state,&game_input,0,0,button_state.held,
                                                   events,sizeof(events)/sizeof(events[0]));
             for(size_t i=0;i<releases;i++) {
                 if(post_input(&events[i])==0) posted++; else refused++;
@@ -1759,16 +1766,20 @@ int main(int argc, char **argv)
         if (player2 && post_input) {
             const uint64_t retry = 3 * PW_WINE64_TICKS_PER_S;
             key_source = PW_INPUT_PAD2;
-            uint32_t held2 = 0;
+            uint32_t held2 = 0, pressed2 = 0, released2 = 0;
             if (pad2_status == PW_OK && pw_pad_ps5_read(&pad2) == PW_OK) {
                 if (pad2.core.connected) pad2_seen = tick;
                 held2 = pad2.core.previous_buttons;
+                pressed2 = pad2.core.pressed_edges;
+                released2 = pad2.core.released_edges;
             }
             int captured = menu_open || osk.state==PW_OSK_OPENING || osk.state==PW_OSK_SHOWN;
             held2 = pw_wine_capture_buttons(held2,&pad2_withheld,captured);
-            size_t count2 = pw_wine_game_inputs(&button_state2,&game_input2,
-                                                held2 & ~button_state2.held,
-                                                button_state2.held & ~held2,events,
+            pressed2 &= captured ? 0 : ~pad2_withheld;
+            released2 &= captured ? 0 : ~pad2_withheld;
+            size_t count2 = pw_wine_game_inputs(&button_state2,&game_input2,held2,
+                                                pressed2 | (held2 & ~button_state2.held),
+                                                released2 | (button_state2.held & ~held2),events,
                                                 sizeof(events)/sizeof(events[0]));
             for(size_t i=0;i<count2;i++) {
                 if(post_input(&events[i])==0) posted++; else refused++;

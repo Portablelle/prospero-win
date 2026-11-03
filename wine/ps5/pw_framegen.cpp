@@ -78,6 +78,7 @@ struct Chain {
     Image history[2], output[kMaxFactor - 1];
     uint32_t cur = 0;
     bool have_prev = false;
+    VkQueue queue = VK_NULL_HANDLE;
     VkCommandPool pool = VK_NULL_HANDLE;
     uint32_t family = UINT32_MAX;
     VkCommandBuffer cmd[kSlots]{};
@@ -103,10 +104,17 @@ pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 int factor_setting = -1, hud_setting = -1;
 VkInstance instance_seen = VK_NULL_HANDLE;
 bool device_loaded = false;
-struct { VkDevice device; VkPhysicalDevice physical; bool maintenance4; } devices[8];
+struct { VkDevice device; VkPhysicalDevice physical; bool maintenance4; bool spirv16; } devices[8];
+struct { VkInstance handle; uint32_t version; } instances[16];
+struct { VkPhysicalDevice handle; VkInstance instance; bool spirv16; } physicals[64];
 struct { VkQueue queue; uint32_t family; VkDevice device; } queues[32];
 Chain *chains[kMaxChains];
 
+PFN_vkCreateInstance real_CreateInstance;
+PFN_vkDestroyInstance real_DestroyInstance;
+PFN_vkEnumeratePhysicalDevices real_EnumeratePhysicalDevices;
+PFN_vkEnumeratePhysicalDeviceGroups real_EnumeratePhysicalDeviceGroups;
+PFN_vkEnumeratePhysicalDeviceGroupsKHR real_EnumeratePhysicalDeviceGroupsKHR;
 PFN_vkCreateDevice real_CreateDevice;
 PFN_vkDestroyDevice real_DestroyDevice;
 PFN_vkGetDeviceQueue real_GetDeviceQueue;
@@ -365,24 +373,36 @@ bool setup_chain(Chain *c)
 }
 
 /* The command pool and buffers, on the presenting queue's family. */
-bool setup_commands(Chain *c, uint32_t family)
+bool setup_commands(Chain *c, uint32_t family, VkQueue queue)
 {
-    if (c->pool && c->family == family) return true;
-    if (c->pool) {
-        vkDeviceWaitIdle(c->device);
-        vkDestroyCommandPool(c->device, c->pool, nullptr);
-        c->pool = VK_NULL_HANDLE;
+    if (c->pool && c->family == family && c->queue == queue) return true;
+    // History and generated images are shared by the slots. A queue switch
+    // must finish every submission using them, even within the same family.
+    if (c->pool && vkWaitForFences(c->device, kSlots, c->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        c->failed = true;
+        return false;
     }
+    if (c->pool && c->family == family) { c->queue = queue; return true; }
+    VkCommandPool temporary = VK_NULL_HANDLE;
     VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool.queueFamilyIndex = family;
-    if (vkCreateCommandPool(c->device, &pool, nullptr, &c->pool) != VK_SUCCESS) return false;
+    if (vkCreateCommandPool(c->device, &pool, nullptr, &temporary) != VK_SUCCESS) return false;
+    VkCommandBuffer buffers[kSlots]{};
     VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    alloc.commandPool = c->pool;
+    alloc.commandPool = temporary;
     alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     alloc.commandBufferCount = kSlots;
+    if (vkAllocateCommandBuffers(c->device, &alloc, buffers) != VK_SUCCESS) {
+        vkDestroyCommandPool(c->device, temporary, nullptr);
+        return false;
+    }
+    if(c->pool) vkDestroyCommandPool(c->device, c->pool, nullptr);
+    c->pool = temporary;
+    memcpy(c->cmd,buffers,sizeof(buffers));
     c->family = family;
-    return vkAllocateCommandBuffers(c->device, &alloc, c->cmd) == VK_SUCCESS;
+    c->queue = queue;
+    return true;
 }
 
 void barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags src_access,
@@ -472,6 +492,83 @@ Chain *find_chain(VkSwapchainKHR handle)
     return nullptr;
 }
 
+// The embedded shaders use SPIR-V 1.6, which requires both the
+// application's instance API and the physical device API to be Vulkan 1.3.
+VKAPI_ATTR VkResult VKAPI_CALL fg_CreateInstance(const VkInstanceCreateInfo *info,
+        const VkAllocationCallbacks *allocator, VkInstance *instance)
+{
+    VkResult result=real_CreateInstance(info,allocator,instance);
+    if(result==VK_SUCCESS) {
+        pthread_mutex_lock(&lock);
+        for(auto &entry:instances) if(!entry.handle) {
+            entry={*instance,info && info->pApplicationInfo ? info->pApplicationInfo->apiVersion : VK_API_VERSION_1_0};
+            break;
+        }
+        pthread_mutex_unlock(&lock);
+    }
+    return result;
+}
+VKAPI_ATTR void VKAPI_CALL fg_DestroyInstance(VkInstance instance,const VkAllocationCallbacks *allocator)
+{
+    pthread_mutex_lock(&lock);
+    for(auto &entry:instances) if(entry.handle==instance) entry={};
+    for(auto &entry:physicals) if(entry.instance==instance) entry={};
+    if(instance_seen==instance) instance_seen=VK_NULL_HANDLE;
+    pthread_mutex_unlock(&lock);
+    real_DestroyInstance(instance,allocator);
+}
+void remember_physical(VkInstance instance,VkPhysicalDevice physical)
+{
+    uint32_t version=0;
+    for(auto &entry:instances) if(entry.handle==instance) version=entry.version;
+    auto properties=(PFN_vkGetPhysicalDeviceProperties)vk_icdGetInstanceProcAddr(instance,"vkGetPhysicalDeviceProperties");
+    VkPhysicalDeviceProperties props{};
+    if(properties) properties(physical,&props);
+    for(auto &entry:physicals) if(entry.handle==physical) return;
+    for(auto &entry:physicals) if(!entry.handle) {
+        entry={physical,instance,version>=VK_API_VERSION_1_3 && props.apiVersion>=VK_API_VERSION_1_3};break;
+    }
+}
+VKAPI_ATTR VkResult VKAPI_CALL fg_EnumeratePhysicalDevices(VkInstance instance,uint32_t *count,VkPhysicalDevice *out)
+{
+    VkResult result=real_EnumeratePhysicalDevices(instance,count,out);
+    if(out && (result==VK_SUCCESS || result==VK_INCOMPLETE)) {
+        pthread_mutex_lock(&lock);
+        for(uint32_t i=0;i<*count;i++) remember_physical(instance,out[i]);
+        pthread_mutex_unlock(&lock);
+    }
+    return result;
+}
+void remember_groups(VkInstance instance,uint32_t count,VkPhysicalDeviceGroupProperties *groups)
+{
+    pthread_mutex_lock(&lock);
+    for(uint32_t i=0;i<count;i++)
+        for(uint32_t j=0;j<groups[i].physicalDeviceCount;j++) remember_physical(instance,groups[i].physicalDevices[j]);
+    pthread_mutex_unlock(&lock);
+}
+VKAPI_ATTR VkResult VKAPI_CALL fg_EnumeratePhysicalDeviceGroups(VkInstance instance,uint32_t *count,VkPhysicalDeviceGroupProperties *out)
+{
+    VkResult result=real_EnumeratePhysicalDeviceGroups(instance,count,out);
+    if(out && (result==VK_SUCCESS || result==VK_INCOMPLETE)) remember_groups(instance,*count,out);
+    return result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL fg_EnumeratePhysicalDeviceGroupsKHR(VkInstance instance,uint32_t *count,VkPhysicalDeviceGroupProperties *out)
+{
+    VkResult result=real_EnumeratePhysicalDeviceGroupsKHR(instance,count,out);
+    if(out && (result==VK_SUCCESS || result==VK_INCOMPLETE)) remember_groups(instance,*count,out);
+    return result;
+}
+bool spirv16_of(VkPhysicalDevice physical)
+{
+    for(auto &entry:physicals) if(entry.handle==physical) return entry.spirv16;
+    return false;
+}
+VkInstance instance_of(VkPhysicalDevice physical)
+{
+    for(auto &entry:physicals) if(entry.handle==physical) return entry.instance;
+    return VK_NULL_HANDLE;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL fg_CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo *info,
                                                const VkAllocationCallbacks *allocator, VkDevice *device)
 {
@@ -479,7 +576,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateDevice(VkPhysicalDevice physical, const 
     if (result == VK_SUCCESS) {
         pthread_mutex_lock(&lock);
         for (auto &d : devices)
-            if (!d.device) { d.device = *device; d.physical = physical; d.maintenance4 = maintenance4_enabled(info); break; }
+            if (!d.device) { d.device = *device; d.physical = physical; d.maintenance4 = maintenance4_enabled(info); d.spirv16 = spirv16_of(physical); break; }
         pthread_mutex_unlock(&lock);
     }
     return result;
@@ -517,8 +614,25 @@ VKAPI_ATTR void VKAPI_CALL fg_GetDeviceQueue2(VkDevice device, const VkDeviceQue
 VKAPI_ATTR VkResult VKAPI_CALL fg_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *info,
                                                      const VkAllocationCallbacks *allocator, VkSwapchainKHR *handle)
 {
+    pthread_mutex_lock(&lock);
+    VkPhysicalDevice physical=physical_of(device);
+    VkInstance instance=instance_of(physical);
+    bool compatible=false;
+    for(auto &entry:devices) if(entry.device==device) compatible=entry.spirv16;
+    pthread_mutex_unlock(&lock);
+    auto surface_caps=(PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)
+        vk_icdGetInstanceProcAddr(instance,"vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    VkSurfaceCapabilitiesKHR caps{};
+    const VkImageUsageFlags transfer=VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    uint32_t extra=factor()-1;
+    if(!compatible || !surface_caps ||
+       surface_caps(physical,info->surface,&caps)!=VK_SUCCESS ||
+       (caps.supportedUsageFlags & transfer)!=transfer ||
+       info->minImageCount>UINT32_MAX-extra ||
+       (caps.maxImageCount && (info->minImageCount+extra)>caps.maxImageCount))
+        return real_CreateSwapchainKHR(device,info,allocator,handle);
     VkSwapchainCreateInfoKHR ours = *info;
-    ours.minImageCount += factor() - 1;
+    ours.minImageCount += extra;
     ours.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     /* FIFO paces the pictures; mailbox or immediate would drop or tear them. */
     ours.presentMode = VK_PRESENT_MODE_FIFO_KHR;
@@ -571,13 +685,15 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     if (info->swapchainCount != 1) return real_QueuePresentKHR(queue, info);
     pthread_mutex_lock(&lock);
     Chain *c = find_chain(info->pSwapchains[0]);
-    if (!c || !setup_commands(c, family_of(queue))) {
-        pthread_mutex_unlock(&lock);
-        return real_QueuePresentKHR(queue, info);
-    }
-    if (c->failed) {
+    if (c && c->failed) {
         pthread_mutex_unlock(&lock);
         return VK_ERROR_OUT_OF_DATE_KHR;
+    }
+    if (!c || !setup_commands(c, family_of(queue), queue)) {
+        bool failed=c && c->failed;
+        if(c) c->have_prev=false;
+        pthread_mutex_unlock(&lock);
+        return failed ? VK_ERROR_OUT_OF_DATE_KHR : real_QueuePresentKHR(queue, info);
     }
     /* Allocation failure leaves the application's original presentation
      * untouched: no internal image or semaphore has been acquired yet. */
@@ -589,6 +705,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_QueuePresentKHR(VkQueue queue, const VkPresent
     std::unique_ptr<VkSemaphore[]> waits(new (std::nothrow) VkSemaphore[capacity]);
     std::unique_ptr<VkPipelineStageFlags[]> stages(new (std::nothrow) VkPipelineStageFlags[capacity]);
     if (!waits || !stages) {
+        c->have_prev=false;
         pthread_mutex_unlock(&lock);
         return real_QueuePresentKHR(queue, info);
     }
@@ -732,6 +849,11 @@ PFN_vkVoidFunction wrap(const char *name, PFN_vkVoidFunction real)
         if (!real_##fn) real_##fn = (PFN_vk##fn)real; \
         return (PFN_vkVoidFunction)fg_##fn; \
     }
+    PW_FRAMEGEN_WRAP(CreateInstance)
+    PW_FRAMEGEN_WRAP(DestroyInstance)
+    PW_FRAMEGEN_WRAP(EnumeratePhysicalDevices)
+    PW_FRAMEGEN_WRAP(EnumeratePhysicalDeviceGroups)
+    PW_FRAMEGEN_WRAP(EnumeratePhysicalDeviceGroupsKHR)
     PW_FRAMEGEN_WRAP(CreateDevice)
     PW_FRAMEGEN_WRAP(DestroyDevice)
     PW_FRAMEGEN_WRAP(GetDeviceQueue)

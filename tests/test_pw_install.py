@@ -354,7 +354,7 @@ def check_reshade(root: Path, wine: Path, setup: Path, log: Path) -> None:
     assert (game / "reshade-cache").is_dir()
     registry = (prefix / "user.reg").read_text()
     assert '"d3d9"="native"' in registry and '"d3dcompiler_47"="native"' in registry
-    assert '"ProxyServer"="127.0.0.1:9"' in registry and '"ProxyEnable"=dword:00000001' in registry
+    assert "ProxyServer" not in registry and "ProxyEnable" not in registry
     profile = (library / "profiles" / "reshade-game.profile").read_text()
     assert "dll_overrides = d3d8,d3d9,d3d10core,d3d11,dxgi,d3dcompiler_47,ddraw=n" in profile.splitlines(), profile
 

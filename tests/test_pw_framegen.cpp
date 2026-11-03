@@ -7,20 +7,26 @@
 
 extern "C" const unsigned char pw_framegen_network[] = {0};
 extern "C" const unsigned char pw_framegen_network_end[] = {0};
-extern "C" PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance,const char*) { return nullptr; }
+static VkResult VKAPI_CALL surface_capabilities(VkPhysicalDevice,VkSurfaceKHR,VkSurfaceCapabilitiesKHR*);
+static void VKAPI_CALL physical_properties(VkPhysicalDevice,VkPhysicalDeviceProperties*);
+extern "C" PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance,const char* name) {
+    if(!strcmp(name,"vkGetPhysicalDeviceSurfaceCapabilitiesKHR")) return (PFN_vkVoidFunction)surface_capabilities;
+    if(!strcmp(name,"vkGetPhysicalDeviceProperties")) return (PFN_vkVoidFunction)physical_properties;
+    return nullptr;
+}
 extern "C" PFN_vkVoidFunction VKAPI_CALL vk_common_GetDeviceProcAddr(VkDevice,const char*) { return nullptr; }
 VkResult fg_context_create(const fg_create_info*,fg_context**,char*,size_t) { return VK_ERROR_INITIALIZATION_FAILED; }
 void fg_context_destroy(fg_context*) {}
 VkResult fg_context_load_network(fg_context*,const void*,size_t,char*,size_t) { return VK_ERROR_INITIALIZATION_FAILED; }
 void fg_record_generate(fg_context*,VkCommandBuffer,uint32_t,fg_method,const fg_frame_pair*,VkImageView) {}
 
-static unsigned waits_seen, fence_waits, submits, presents;
+static unsigned waits_seen, fence_waits, all_fences, submits, presents;
 static int target = -1;
 static bool submit_failed, pending[4];
 static Chain chain;
 template<typename T> static T handle(uintptr_t n) { return (T)n; }
-static VkResult VKAPI_CALL wait_fences(VkDevice,uint32_t,const VkFence*,VkBool32,uint64_t)
-{ fence_waits++; return VK_SUCCESS; }
+static VkResult VKAPI_CALL wait_fences(VkDevice,uint32_t count,const VkFence*,VkBool32,uint64_t)
+{ fence_waits++; if(count==kSlots) all_fences++; return VK_SUCCESS; }
 static VkResult VKAPI_CALL reset_fences(VkDevice,uint32_t,const VkFence*) { return VK_SUCCESS; }
 static VkResult VKAPI_CALL reset_command(VkCommandBuffer,VkCommandBufferResetFlags) { return VK_SUCCESS; }
 static VkResult VKAPI_CALL begin_command(VkCommandBuffer,const VkCommandBufferBeginInfo*) { return VK_SUCCESS; }
@@ -51,6 +57,19 @@ static VkResult VKAPI_CALL present(VkQueue,const VkPresentInfoKHR *info)
     assert(info->pWaitSemaphores[0]==chain.ready[image]);
     assert(!pending[image]);pending[image]=true;presents++;return VK_SUCCESS;
 }
+static bool allocation_failed;
+static unsigned pools_destroyed;
+static VkResult VKAPI_CALL create_pool(VkDevice,const VkCommandPoolCreateInfo*,const VkAllocationCallbacks*,VkCommandPool *out)
+{ *out=handle<VkCommandPool>(999);return VK_SUCCESS; }
+static void VKAPI_CALL destroy_pool(VkDevice,VkCommandPool,const VkAllocationCallbacks*) { pools_destroyed++; }
+static VkResult VKAPI_CALL allocate_commands(VkDevice,const VkCommandBufferAllocateInfo *info,VkCommandBuffer *out)
+{ if(allocation_failed) return VK_ERROR_OUT_OF_HOST_MEMORY;for(unsigned i=0;i<info->commandBufferCount;i++)out[i]=handle<VkCommandBuffer>(1000+i);return VK_SUCCESS; }
+static VkSurfaceCapabilitiesKHR capabilities{};
+static uint32_t physical_version=VK_API_VERSION_1_3;
+static VkResult VKAPI_CALL surface_capabilities(VkPhysicalDevice,VkSurfaceKHR,VkSurfaceCapabilitiesKHR *out)
+{ *out=capabilities;return VK_SUCCESS; }
+static void VKAPI_CALL physical_properties(VkPhysicalDevice,VkPhysicalDeviceProperties *out)
+{ out->apiVersion=physical_version; }
 static unsigned swapchain_attempts;
 static VkResult VKAPI_CALL create_swapchain(VkDevice,const VkSwapchainCreateInfoKHR*,const VkAllocationCallbacks*,VkSwapchainKHR*)
 { swapchain_attempts++; return VK_ERROR_INITIALIZATION_FAILED; }
@@ -67,6 +86,7 @@ int main()
     pw_fgvk_CmdBlitImage=blit_image;pw_fgvk_AcquireNextImageKHR=acquire;pw_fgvk_QueueSubmit=submit;
     real_QueuePresentKHR=present;
     chain.device=handle<VkDevice>(1);chain.handle=handle<VkSwapchainKHR>(2);
+    chain.queue=handle<VkQueue>(5);
     chain.pool=handle<VkCommandPool>(3);chain.family=0;chain.factor=3;chain.have_prev=true;
     chain.image_count=4;chain.extent={32,32};
     for(unsigned i=0;i<4;i++) chain.ready[i]=handle<VkSemaphore>(100+i);
@@ -91,6 +111,16 @@ int main()
     assert(fg_QueuePresentKHR(handle<VkQueue>(5),&info)==VK_ERROR_OUT_OF_DATE_KHR);
     assert(fence_waits==before); /* no wait on the failed submission's reset fence */
     chains[0]=nullptr;
+    chain.failed=false;
+    pw_fgvk_CreateCommandPool=create_pool;pw_fgvk_DestroyCommandPool=destroy_pool;
+    pw_fgvk_AllocateCommandBuffers=allocate_commands;
+    assert(setup_commands(&chain,0,handle<VkQueue>(6)) && all_fences==1);
+    allocation_failed=true;
+    assert(!setup_commands(&chain,1,handle<VkQueue>(7)));
+    assert(chain.family==0 && chain.pool==handle<VkCommandPool>(3) && pools_destroyed==1);
+    allocation_failed=false;
+    assert(setup_commands(&chain,1,handle<VkQueue>(7)) && chain.family==1);
+    assert(chain.cmd[0] && pools_destroyed==2);
     real_CreateDevice=create_device;real_DestroyDevice=destroy_device;real_GetDeviceQueue=get_queue;
     for(unsigned i=0;i<12;i++) {
         VkDevice device;VkQueue queue;
@@ -104,10 +134,32 @@ int main()
     VkSwapchainCreateInfoKHR recreate{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     recreate.oldSwapchain=handle<VkSwapchainKHR>(3);VkSwapchainKHR output;
     assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
-    assert(swapchain_attempts==1);
+    assert(swapchain_attempts==1); // unknown API environment passes through once
+    instances[0]={handle<VkInstance>(4),VK_API_VERSION_1_3};
+    remember_physical(instances[0].handle,handle<VkPhysicalDevice>(50));
+    assert(spirv16_of(handle<VkPhysicalDevice>(50)));
+    devices[0]={handle<VkDevice>(1),handle<VkPhysicalDevice>(50),false,true};
+    capabilities.maxImageCount=2;
+    capabilities.supportedUsageFlags=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    recreate.minImageCount=2;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==2); // insufficient capacity: no augmentation
+    capabilities.maxImageCount=0;
+    capabilities.supportedUsageFlags=0;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==3); // missing transfer support: no augmentation
+    capabilities.supportedUsageFlags=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==4); // old handle cannot be retried
     recreate.oldSwapchain=VK_NULL_HANDLE;
     assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
-    assert(swapchain_attempts==3);
+    assert(swapchain_attempts==6);
+    instances[0].version=VK_API_VERSION_1_2;
+    remember_physical(instances[0].handle,handle<VkPhysicalDevice>(51));
+    assert(!spirv16_of(handle<VkPhysicalDevice>(51)));
+    instances[0].version=VK_API_VERSION_1_3;physical_version=VK_API_VERSION_1_2;
+    remember_physical(instances[0].handle,handle<VkPhysicalDevice>(52));
+    assert(!spirv16_of(handle<VkPhysicalDevice>(52)));
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     VkPhysicalDeviceVulkan13Features core{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     device_info.pNext=&core;

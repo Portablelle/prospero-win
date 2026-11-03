@@ -131,14 +131,8 @@ RESHADE_CONFIG = {
     "OVERLAY": {"TutorialProgress": "4", "ShowFPS": "0", "ShowClock": "0", "ShowFrameTime": "0"},
     "SCREENSHOT": {"SavePath": ".\\screenshots"},
 }
-# ReShade asks GitHub for its latest version at every start, on the render
-# thread, with nothing in ReShade.ini to stop it. The console has DNS and TLS,
-# so that is a lookup and a handshake each time, and up to 15 s on a network
-# that does not answer. The prefix's wininet is pointed at a proxy that
-# refuses (nothing listens on the discard port), so the check fails at once;
-# reshade_update_check: true leaves the prefix's network settings alone.
-RESHADE_OFFLINE = ["[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings]",
-                   '"ProxyEnable"=dword:00000001', '"ProxyServer"="127.0.0.1:9"', '"ProxyOverride"=""']
+# Keep the prefix's Internet Settings intact: they are shared by the game,
+# launchers and installers. ReShade's optional version check is left enabled.
 # reshade.me refuses Python's default User-Agent.
 USER_AGENT = "prospero-win-pw_install"
 ZSTD_MAGIC = bytes.fromhex("28b52ffd")
@@ -442,7 +436,6 @@ class Installer:
         self.reshade_version = str(wine_section.get("reshade_version", "6.7.3"))
         self.reshade_api = wine_section.get("reshade_api")
         self.reshade_config = wine_section.get("reshade_config") or {}
-        self.reshade_update_check = bool(wine_section.get("reshade_update_check", False))
 
     # --- variables and paths --------------------------------------------
     def expand(self, value):
@@ -798,8 +791,6 @@ class Installer:
             config.write(out, space_around_delimiters=False)
         self.regedit(["[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]",
                       f'"{self.reshade_api}"="native"', '"d3dcompiler_47"="native"'], None)
-        if not self.reshade_update_check:
-            self.regedit(RESHADE_OFFLINE, None)
         log(f"ReShade {self.reshade_version} installed as {exe.parent / self.reshade_api}.dll")
         return [self.reshade_api, "d3dcompiler_47"]
 

@@ -251,12 +251,9 @@ settings, which `reshade_config` can change:
   and the console finds every shader already compiled.
 - **No tutorial and no FPS counter**, and screenshots go to `screenshots`
   beside the executable.
-- **No update check.** ReShade asks GitHub for its latest version at every
-  start, before the first frame, and nothing in `ReShade.ini` turns that off.
-  The installer points the prefix's wininet at a proxy that refuses, so the
-  check fails at once. A game in the same prefix that uses wininet to go
-  online would be refused too: `reshade_update_check: true` leaves the
-  prefix's network settings alone.
+- **Network settings stay intact.** ReShade may check for updates before
+  the first frame; the installer does not suppress it through a prefix-wide
+  proxy, which would also block the game's WinINet connections.
 
 A preset's search paths, `PreprocessorDefinitions` and `[DEPTH]` settings go
 into `reshade_config`, with the paths relative to the executable (`.\`).
