@@ -147,8 +147,11 @@ WINE_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "w
 DOWNLOADS = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "prospero-win"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 REG_TYPES = {"REG_SZ", "REG_DWORD", "REG_BINARY"}
-PROSPERO_DISPLAY = ("desktop", "scaling", "view", "show_fps", "framegen", "refresh", "opengl_thread")
-PROSPERO_INPUT = ("preset", "mode", "mouse", "mouse_speed", "rumble", "player2")
+PROSPERO_DISPLAY = ("desktop", "scaling", "view", "show_fps", "framegen", "menu", "refresh", "opengl_thread")
+PROSPERO_INPUT = ("preset", "mode", "mouse", "mouse_speed", "rumble", "player2",
+                  "keyboard_stick", "stick_up", "stick_down", "stick_left", "stick_right", "stick_deadzone",
+                  "left_stick", "cross", "circle", "square", "triangle", "l1", "r1", "l2", "r2", "l3", "r3",
+                  "up", "down", "left", "right", "options", "create", "touchpad")
 
 
 class InstallError(Exception):
@@ -759,8 +762,13 @@ class Installer:
         url, digest = reshade_release(self.reshade_version)
         setup = fetch(url, digest, f"ReShade_Setup_{self.reshade_version}.exe")
         bits = "32" if pe_architecture(exe) == "pe32" else "64"
+        dll_name = f"{self.reshade_api}.dll"
+        if any(path.name.lower() == dll_name for path in exe.parent.iterdir()):
+            raise InstallError(f"ReShade would replace an existing game-local {dll_name}; configure the wrapper chain explicitly")
         with zipfile.ZipFile(setup) as payload:
-            (exe.parent / f"{self.reshade_api}.dll").write_bytes(payload.read(f"ReShade{bits}.dll"))
+            contents = payload.read(f"ReShade{bits}.dll")
+        with (exe.parent / dll_name).open("xb") as destination:
+            destination.write(contents)
         # ReShade compiles its effects to HLSL for D3DCompiler_47 to build,
         # and under Wine skips the system one, whose builtin lacks what it
         # needs (dll_main.cpp): Microsoft's, which winetricks sets native.
@@ -880,6 +888,19 @@ class Installer:
     # --- the whole install -----------------------------------------------------
     def install(self) -> Path:
         mode = self.graphics_mode()  # Reject invalid providers before prefix creation.
+        prospero = self.document.get("prospero") or self.script.get("prospero") or {}
+        for section, keys in (("display", PROSPERO_DISPLAY), ("input", PROSPERO_INPUT)):
+            unknown = set(prospero.get(section) or {}) - set(keys)
+            if unknown:
+                raise InstallError(f"prospero.{section}: unknown keys {sorted(unknown)}")
+        if self.reshade:
+            if self.reshade_api not in RESHADE_APIS:
+                raise InstallError(f"wine.reshade_api: one of {list(RESHADE_APIS)}")
+            required = {self.reshade_api, "d3dcompiler_47"}
+            for names, order in self.overrides.items():
+                normalized = {name.strip().lower().lstrip("*").removesuffix(".dll") for name in names.split(",")}
+                if normalized & required and order.replace(" ", "").lower().split(",")[0] != "n":
+                    raise InstallError("ReShade conflicts with an explicit DLL override; its graphics API and d3dcompiler_47 must load native first")
         if mode == "opengl":
             if not self.mesa_zink:
                 raise InstallError("graphics=opengl requires --mesa-zink local artifact directory")

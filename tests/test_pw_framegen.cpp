@@ -115,12 +115,13 @@ int main()
     pw_fgvk_CreateCommandPool=create_pool;pw_fgvk_DestroyCommandPool=destroy_pool;
     pw_fgvk_AllocateCommandBuffers=allocate_commands;
     assert(setup_commands(&chain,0,handle<VkQueue>(6)) && all_fences==1);
+    assert(!setup_commands(&chain,1,handle<VkQueue>(7)) && chain.failed);
+    Chain fresh;fresh.device=chain.device;
     allocation_failed=true;
-    assert(!setup_commands(&chain,1,handle<VkQueue>(7)));
-    assert(chain.family==0 && chain.pool==handle<VkCommandPool>(3) && pools_destroyed==1);
+    assert(!setup_commands(&fresh,0,handle<VkQueue>(7)));
+    assert(!fresh.pool && fresh.family==UINT32_MAX && pools_destroyed==1);
     allocation_failed=false;
-    assert(setup_commands(&chain,1,handle<VkQueue>(7)) && chain.family==1);
-    assert(chain.cmd[0] && pools_destroyed==2);
+    assert(setup_commands(&fresh,0,handle<VkQueue>(7)) && fresh.cmd[0]);
     real_CreateDevice=create_device;real_DestroyDevice=destroy_device;real_GetDeviceQueue=get_queue;
     for(unsigned i=0;i<12;i++) {
         VkDevice device;VkQueue queue;
@@ -132,6 +133,8 @@ int main()
     }
     real_CreateSwapchainKHR=create_swapchain;factor_setting=2;
     VkSwapchainCreateInfoKHR recreate{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    recreate.imageFormat=VK_FORMAT_R8G8B8A8_UNORM;
+    recreate.imageColorSpace=VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     recreate.oldSwapchain=handle<VkSwapchainKHR>(3);VkSwapchainKHR output;
     assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
     assert(swapchain_attempts==1); // unknown API environment passes through once
@@ -160,6 +163,10 @@ int main()
     instances[0].version=VK_API_VERSION_1_3;physical_version=VK_API_VERSION_1_2;
     remember_physical(instances[0].handle,handle<VkPhysicalDevice>(52));
     assert(!spirv16_of(handle<VkPhysicalDevice>(52)));
+    recreate.imageFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
+    unsigned attempts_before=swapchain_attempts;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==attempts_before+1); // unsupported HDR passes through once
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     VkPhysicalDeviceVulkan13Features core{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     device_info.pNext=&core;

@@ -40,6 +40,41 @@ uint32_t pw_wine_capture_buttons(uint32_t held, uint32_t *withheld, int captured
     return captured?0:held & ~*withheld;
 }
 
+int pw_wine_input_enqueue(PwWineInputDelivery *queue,unsigned source,const PwWineInput *event)
+{
+    if(!queue || !event || source>=PW_INPUT_SOURCES) return -1;
+    if(queue->count==PW_INPUT_DELIVERY_CAPACITY) { queue->overflow=1; return -1; }
+    size_t at=(queue->first+queue->count)%PW_INPUT_DELIVERY_CAPACITY;
+    queue->pending[at].event=*event;queue->pending[at].source=source;queue->count++;
+    return 0;
+}
+int pw_wine_input_drain(PwWineInputDelivery *queue,int (*sink)(const PwWineInput *))
+{
+    if(!queue || !sink) return -1;
+    while(queue->count) {
+        size_t at=queue->first;
+        if(pw_wine_input_owned_post(&queue->owners,queue->pending[at].source,sink,&queue->pending[at].event)) return -1;
+        queue->first=(at+1)%PW_INPUT_DELIVERY_CAPACITY;queue->count--;
+    }
+    return 0;
+}
+int pw_wine_input_enqueue_release(PwWineInputDelivery *queue,unsigned source)
+{
+    for(unsigned type=0;type<2;type++)
+        for(unsigned code=0;code<(type?3u:256u);code++) {
+            PwWineInput event={type?PW_WINE_INPUT_MOUSE_BUTTON:PW_WINE_INPUT_KEY,(uint16_t)code,0,0,0};
+            if(pw_wine_input_enqueue(queue,source,&event)) return -1;
+        }
+    return 0;
+}
+void pw_wine_input_session_begin(PwWineInputSession *session,int menu,int dialog)
+{ if(session) session->captured=!!(menu || dialog); }
+uint32_t pw_wine_input_session_buttons(PwWineInputSession *session,unsigned slot,uint32_t held)
+{
+    if(!session || slot>=3) return 0;
+    return pw_wine_capture_buttons(held,&session->withheld[slot],session->captured);
+}
+
 int pw_wine_frame_box_init(PwWineFrameBox *box, uint8_t *storage, size_t bytes)
 {
     if (!box || !storage || !bytes) return -1;

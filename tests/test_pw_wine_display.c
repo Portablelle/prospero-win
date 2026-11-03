@@ -445,9 +445,37 @@ static void test_key_owners(void)
 
 }
 
+static void test_delivery(void)
+{
+    static PwWineInputDelivery queue;
+    PwWineInput down={PW_WINE_INPUT_KEY,'A',0,0,1},up=down;up.down=0;
+    owned_fail=0;
+    assert(!pw_wine_input_enqueue(&queue,PW_INPUT_OSK,&down));
+    assert(!pw_wine_input_drain(&queue,owned_sink));
+    assert(queue.owners.keys['A']);
+    owned_fail=1;
+    assert(!pw_wine_input_enqueue(&queue,PW_INPUT_OSK,&up));
+    assert(pw_wine_input_drain(&queue,owned_sink)==-1 && queue.count==1);
+    assert(!pw_wine_input_enqueue(&queue,PW_INPUT_PAD,&down));
+    assert(!pw_wine_input_enqueue(&queue,PW_INPUT_PAD,&up));
+    owned_fail=0;
+    assert(!pw_wine_input_drain(&queue,owned_sink));
+    assert(!queue.count && !queue.owners.keys['A']);
+    PwWineInputSession session={0};
+    pw_wine_input_session_begin(&session,0,1);
+    assert(!pw_wine_input_session_buttons(&session,0,0x4000));
+    // A dialog completion later in the tick does not change its decision.
+    assert(!pw_wine_input_session_buttons(&session,1,0x4000));
+    pw_wine_input_session_begin(&session,0,0);
+    assert(!pw_wine_input_session_buttons(&session,0,0x4000));
+    assert(!pw_wine_input_session_buttons(&session,0,0));
+    assert(pw_wine_input_session_buttons(&session,0,0x4000)==0x4000);
+}
+
 int main(void)
 {
     test_key_owners();
+    test_delivery();
     test_frames();
     test_threads();
     test_inputs();

@@ -82,6 +82,8 @@ static struct thread_stack_info exception_info;
 static jmp_buf abort_jump;static int aborted,locked;
 static void abort_thread(int code) __attribute__((noreturn));
 static void abort_thread(int code){(void)code;aborted++;longjmp(abort_jump,1);}
+static void abort_process(int code) __attribute__((noreturn));
+static void abort_process(int code){abort_thread(code);}
 static int is_inside_thread_stack(struct thread_data *data,void *ptr,struct thread_stack_info *info)
 {(void)data;(void)ptr;*info=exception_info;return 1;}
 static int is_inside_signal_stack(struct thread_data *data,void *ptr){(void)data;(void)ptr;return 0;}

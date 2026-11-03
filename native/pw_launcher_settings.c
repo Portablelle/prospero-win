@@ -8,24 +8,10 @@
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
-static const char *buttons[17] = {"cross","circle","square","triangle","l1","r1","l2","r2","l3","r3","up","down","left","right","options","create","touchpad"};
 static const char *names[17] = {"CROIX","ROND","CARRE","TRIANGLE","L1","R1","L2","R2","L3","R3","FLECHE HAUT","FLECHE BAS","FLECHE GAUCHE","FLECHE DROITE","OPTIONS","CREATE","PAVE TACTILE"};
 static const char *modes[] = {"PERSONNALISE", "DEUX STICKS (WASD + SOURIS)", "SOURIS (STICK GAUCHE)", "MANETTE XINPUT", "CLAVIER / SOURIS USB"};
 static const char *keys[] = {"none","mouse_left","mouse_right","mouse_middle","space","enter","escape","shift","ctrl","alt","tab","backspace","up","down","left","right","e","f","r","v","t","w","a","s","d","q","z","1","2","3","4","5","f1","f5","f9"};
 static const unsigned widths[] = {1280,1600,1920,3840}, heights[] = {720,900,1080,2160};
-static void binding_text(const PwGameBinding *b, char *out, size_t cap)
-{
-    if (b->kind == PW_GAME_BIND_MOUSE) snprintf(out,cap,"%s",b->code==0?"mouse_left":b->code==1?"mouse_right":"mouse_middle");
-    else if (b->kind != PW_GAME_BIND_KEY) snprintf(out,cap,"none");
-    else if (b->code >= 'A' && b->code <= 'Z') snprintf(out,cap,"%c",(char)(b->code+32));
-    else if (b->code >= '0' && b->code <= '9') snprintf(out,cap,"%c",(char)b->code);
-    else {
-        const struct { unsigned code; const char *name; } map[]={{32,"space"},{13,"enter"},{27,"escape"},{16,"shift"},{17,"ctrl"},{18,"alt"},{9,"tab"},{8,"backspace"},{38,"up"},{40,"down"},{37,"left"},{39,"right"}};
-        for (size_t i=0;i<sizeof(map)/sizeof(map[0]);i++) if(b->code==map[i].code){snprintf(out,cap,"%s",map[i].name);return;}
-        if(b->code>=0x70 && b->code<=0x87)snprintf(out,cap,"f%u",b->code-0x6f);
-        else snprintf(out,cap,"vk:0x%02X",b->code);
-    }
-}
 void pw_settings_labels(PwLauncherSettings *s)
 {
     snprintf(s->labels[0],32,"RESOLUTION");
@@ -33,7 +19,7 @@ void pw_settings_labels(PwLauncherSettings *s)
     else snprintf(s->values[0],64,"AUTOMATIQUE");
     snprintf(s->labels[1],32,"COMMANDES");snprintf(s->values[1],64,"%s",modes[s->mode]);
     snprintf(s->labels[2],32,"SENSIBILITE SOURIS");snprintf(s->values[2],64,"%u",s->input.mouse_speed);
-    for(int i=0;i<17;i++){snprintf(s->labels[i+3],32,"%s",names[i]);binding_text(&s->input.bindings[i],s->values[i+3],64);}
+    for(int i=0;i<17;i++){snprintf(s->labels[i+3],32,"%s",names[i]);pw_game_binding_text(&s->input.bindings[i],s->values[i+3],64);}
     for(int i=3;i<20;i++) {
         const struct { const char *key,*label; } translations[] = {
             {"none","AUCUN"},{"mouse_left","CLIC GAUCHE"},{"mouse_right","CLIC DROIT"},
@@ -67,24 +53,15 @@ void pw_settings_change(PwLauncherSettings *s,int d)
         snprintf(s->status,sizeof(s->status),"%s",i==3?"4K: ECRAN ET SORTIE PS5 2160P REQUIS - FLUIDITE A TESTER":"MODIFICATIONS APPLIQUEES AU PROCHAIN LANCEMENT");
     }else if(s->row==1){
         s->mode=s->mode==0?(d>0?1:4):1+(s->mode-1+(d>0?1:3))%4;
-        unsigned speed=s->input.mouse_speed, rumble=s->input.rumble, deadzone=s->input.stick_deadzone;
-        pw_game_input_init(&s->input);
-        s->input.mouse_speed=speed; s->input.rumble=rumble; s->input.stick_deadzone=(uint8_t)deadzone;
-        const char *layout=s->mode==1?
-            "[input]\nmode=keyboard\nkeyboard_stick=left_stick\nmouse=right_stick\ncross=space\ncircle=ctrl\nsquare=e\ntriangle=f\nr2=mouse_left\nl2=mouse_right\nl3=shift\nr1=r\nl1=v\noptions=escape\ntouchpad=enter\n":s->mode==2?
-            "[input]\nmode=keyboard\nkeyboard_stick=none\nmouse=left_stick\ncross=mouse_left\nr2=mouse_left\nsquare=mouse_right\ncircle=escape\ntriangle=enter\noptions=escape\n":s->mode==3?
-            "[input]\nmode=xinput\nkeyboard_stick=none\nmouse=none\n":"[input]\nmode=keyboard\nkeyboard_stick=none\nmouse=none\n";
-        pw_game_input_parse((const uint8_t *)layout,strlen(layout),&s->input);
-        s->input.mouse_speed=speed; s->input.rumble=rumble; s->input.stick_deadzone=(uint8_t)deadzone;
+        pw_game_input_layout(&s->input,(PwGameInputLayout)s->mode);
     }else if(s->row==2){
         int speed=(int)s->input.mouse_speed+(d>0?100:-100);if(speed<100)speed=100;if(speed>5000)speed=5000;s->input.mouse_speed=(unsigned)speed;
     }else if(s->row>=3&&s->row<20){
-        char old[32],line[96];int i=-1,n=(int)(sizeof(keys)/sizeof(keys[0]));
-        binding_text(&s->input.bindings[s->row-3],old,sizeof(old));
+        char old[32];int i=-1,n=(int)(sizeof(keys)/sizeof(keys[0]));
+        pw_game_binding_text(&s->input.bindings[s->row-3],old,sizeof(old));
         for(int k=0;k<n;k++)if(!strcmp(old,keys[k]))i=k;
         i=i<0?0:(i+(d>0?1:n-1))%n;
-        snprintf(line,sizeof(line),"[input]\n%s=%s\n",buttons[s->row-3],keys[i]);
-        pw_game_input_parse((const uint8_t*)line,strlen(line),&s->input);s->mode=0;
+        pw_game_binding_parse(keys[i],&s->input.bindings[s->row-3]);s->mode=0;
     }
     pw_settings_labels(s);
 }
@@ -137,6 +114,7 @@ int pw_settings_text(const PwLauncherSettings *s,const char *original,char *out,
     strcpy(out,original);char val[64],args[PW_APP_ARGUMENTS_CAPACITY];
     if(s->resolution_changed){snprintf(val,sizeof(val),"%ux%u",s->draft.display.width,s->draft.display.height);if(set(out,cap,"display","desktop",val))return -1;
         strcpy(args,s->draft.app.arguments);if(resolution_args(args,sizeof(args),s->draft.display.width,s->draft.display.height)||set(out,cap,"application","arguments",args))return -1;}
+    if(s->mode==PW_GAME_LAYOUT_XINPUT && set(out,cap,"input","player2",NULL)) return -1;
     if(set(out,cap,"input","mode",s->input.mode==PW_GAME_INPUT_XINPUT?"xinput":"keyboard")||
        set(out,cap,"input","left_stick",NULL)||
        set(out,cap,"input","mouse",s->input.mouse==PW_GAME_STICK_LEFT?"left_stick":s->input.mouse==PW_GAME_STICK_RIGHT?"right_stick":"none"))return -1;
@@ -147,9 +125,9 @@ int pw_settings_text(const PwLauncherSettings *s,const char *original,char *out,
     const char *directions[4]={"stick_up","stick_down","stick_left","stick_right"};
     for(int i=0;i<4;i++){
         PwGameBinding key={0};key.kind=PW_GAME_BIND_KEY;key.code=s->input.stick_keys[i];
-        binding_text(&key,val,sizeof(val));if(set(out,cap,"input",directions[i],val))return -1;
+        pw_game_binding_text(&key,val,sizeof(val));if(set(out,cap,"input",directions[i],val))return -1;
     }
-    for(int i=0;i<17;i++){binding_text(&s->input.bindings[i],val,sizeof(val));if(set(out,cap,"input",buttons[i],val))return -1;}
+    for(int i=0;i<17;i++){pw_game_binding_text(&s->input.bindings[i],val,sizeof(val));if(set(out,cap,"input",pw_game_button_name((size_t)i),val))return -1;}
     PwGameProfile check;return pw_game_profile_parse((const uint8_t*)out,strlen(out),&check)==PW_OK?0:-1;
 }
 static int write_all(int fd,const char *text,size_t n)

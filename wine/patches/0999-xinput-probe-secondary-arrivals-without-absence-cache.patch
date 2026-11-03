@@ -1,0 +1,38 @@
+From: Prospero Win local fixes <prospero-win@local>
+Subject: [PATCH] xinput: let arrival-driven probes observe new controllers
+
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -111,13 +111,8 @@
+ static unixlib_handle_t title_pad;
+ static BOOL title_pad_enabled = TRUE;
+ static XINPUT_VIBRATION title_pad_vibration[XUSER_MAX_COUNT];
+-/* Controllers 1..3 are empty until the title opens another user's pad,
+- * which it does only once a game asks for them. A slot that read as
+- * disconnected is asked of the sink again once a second, so a game polling
+- * all four controllers every frame crosses to the Unix side for controller
+- * 0 alone. No lock: two threads probing one slot at once cost one extra
+- * call. */
+-static struct { BOOL absent; ULONGLONG asked; } title_pad_slot[XUSER_MAX_COUNT];
++/* Query every probe, including those triggered by DBT_DEVNODES_CHANGED.
++ * A cached absence can hide a controller after its sole arrival event. */
+ 
+ static BOOL WINAPI find_title_pad(INIT_ONCE *once, void *param, void **context)
+ {
+@@ -155,16 +150,11 @@
+     struct xinput_pad_state pad;
+ 
+     if (index >= XUSER_MAX_COUNT) return FALSE;
+-    if (index && title_pad_slot[index].absent && GetTickCount64() - title_pad_slot[index].asked < 1000)
+-        return FALSE;
+     params.index = index;
+     if (__wine_unix_call(title_pad, unix_pad_state, &params) || !params.state.connected)
+     {
+-        title_pad_slot[index].absent = index != 0;
+-        title_pad_slot[index].asked = GetTickCount64();
+         return FALSE;
+     }
+-    title_pad_slot[index].absent = FALSE;
+     pad = params.state;
+     memset(state, 0, sizeof(*state));
+     state->dwPacketNumber = pad.packet;

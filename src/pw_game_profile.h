@@ -203,6 +203,12 @@ size_t pw_game_graphics_env(const PwGameProfile *profile, PwGameEnv *env);
  * PW_GAME_DEBUG_ENV_MAX; how many. The strings live in profile. */
 size_t pw_game_debug_env(const PwGameProfile *profile, PwGameEnv *env);
 /* An input with nothing bound, keyboard mode, no pointer, full rumble. */
+typedef enum PwGameInputLayout { PW_GAME_LAYOUT_DUAL_STICK=1, PW_GAME_LAYOUT_MOUSE,
+                                PW_GAME_LAYOUT_XINPUT, PW_GAME_LAYOUT_USB } PwGameInputLayout;
+const char *pw_game_button_name(size_t index);
+int pw_game_binding_parse(const char *,PwGameBinding *);
+void pw_game_binding_text(const PwGameBinding *,char *,size_t);
+void pw_game_input_layout(PwGameInput *,PwGameInputLayout);
 void pw_game_input_init(PwGameInput *input);
 /* Parse an input preset file (one [input] section, no preset= line) into
  * input, overriding what it sets. PW_OK or a PW_ERR_* status. */

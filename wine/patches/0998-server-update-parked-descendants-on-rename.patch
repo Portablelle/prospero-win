@@ -1,5 +1,5 @@
 From: Prospero Win local fixes <prospero-win@local>
-Subject: [PATCH] server: track directory duplicates across parent rename
+Subject: [PATCH] server: track all backing-directory renames and duplicates
 
 --- a/server/fd.c
 +++ b/server/fd.c
@@ -52,8 +52,8 @@ Subject: [PATCH] server: track directory duplicates across parent rename
      return fd;
  
  failed:
-@@ -3080,6 +3094,68 @@
-         ((fd->options & FILE_DELETE_ON_CLOSE) ? FILE_DISPOSITION_DELETE : 0);
+@@ -2742,9 +2756,74 @@
+ #endif
  }
  
 +#ifdef PS5_PARK_DIRECTORIES
@@ -118,10 +118,81 @@ Subject: [PATCH] server: track directory duplicates across parent rename
 +}
 +#endif
 +
- /* set new name for the fd */
- static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, data_size_t len,
-                          struct unicode_str nt_name, int create_link, unsigned int flags )
-@@ -3088,6 +3164,9 @@
+ static void set_reparse_point( struct fd *fd, struct async *async )
+ {
+     char *reparse_name;
++#ifdef PS5_PARK_DIRECTORIES
++    struct ps5_rename_path *plan;
++#endif
+     struct stat st;
+     size_t len;
+ 
+@@ -2783,13 +2862,26 @@
+         memcpy( reparse_name, fd->unix_name, len );
+         strcpy( reparse_name + len, "?" );
+ 
++#ifdef PS5_PARK_DIRECTORIES
++        plan = ps5_prepare_rename( fd, reparse_name );
++        if (!plan) { free( reparse_name ); return; }
++#endif
+         if (rename( fd->unix_name, reparse_name ))
+         {
++#ifdef PS5_PARK_DIRECTORIES
++            ps5_finish_rename( plan, 0 );
++#endif
++            file_set_error();
+             free( reparse_name );
+             return;
+         }
++#ifdef PS5_PARK_DIRECTORIES
++        ps5_finish_rename( plan, 1 );
++        free( reparse_name );
++#else
+         free( fd->unix_name );
+         fd->closed->unix_name = fd->unix_name = reparse_name;
++#endif
+     }
+ }
+ 
+@@ -2842,6 +2934,9 @@
+ {
+     const REPARSE_DATA_BUFFER *data = get_req_data();
+     char *base_name;
++#ifdef PS5_PARK_DIRECTORIES
++    struct ps5_rename_path *plan;
++#endif
+     size_t len;
+ 
+     PS5_UNPARK_OR_RETURN( fd );
+@@ -2881,15 +2976,26 @@
+     memcpy( base_name, fd->unix_name, len - 1 );
+     base_name[len - 1] = 0;
+ 
++#ifdef PS5_PARK_DIRECTORIES
++    plan = ps5_prepare_rename( fd, base_name );
++    if (!plan) { free( base_name ); return; }
++#endif
+     if (rename( fd->unix_name, base_name ) < 0)
+     {
++#ifdef PS5_PARK_DIRECTORIES
++        ps5_finish_rename( plan, 0 );
++#endif
+         file_set_error();
+         free( base_name );
+         return;
+     }
+-
++#ifdef PS5_PARK_DIRECTORIES
++    ps5_finish_rename( plan, 1 );
++    free( base_name );
++#else
+     free( fd->unix_name );
+     fd->closed->unix_name = fd->unix_name = base_name;
++#endif
+ 
+     xattr_fremove( fd->unix_fd, XATTR_REPARSE );
+ }
+@@ -3088,6 +3194,9 @@
      struct stat st, st2;
      char *name;
      const unsigned int replace = flags & FILE_RENAME_REPLACE_IF_EXISTS;
@@ -131,7 +202,7 @@ Subject: [PATCH] server: track directory duplicates across parent rename
  
      PS5_UNPARK_OR_RETURN( fd );
      if (!fd->inode || !fd->unix_name)
-@@ -3193,6 +3272,9 @@
+@@ -3193,6 +3302,9 @@
          return;
      }
  
@@ -141,7 +212,7 @@ Subject: [PATCH] server: track directory duplicates across parent rename
      if (rename( fd->unix_name, name ))
      {
          file_set_error();
-@@ -3211,30 +3293,21 @@
+@@ -3211,30 +3323,21 @@
  
      free( fd->nt_name );
      fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );

@@ -375,6 +375,9 @@ bool setup_chain(Chain *c)
 /* The command pool and buffers, on the presenting queue's family. */
 bool setup_commands(Chain *c, uint32_t family, VkQueue queue)
 {
+    // Internal images use exclusive sharing. Keep their initial family for
+    // the lifetime of this chain; recreation gives a new family fresh images.
+    if(c->pool && c->family!=family) { c->failed=true;return false; }
     if (c->pool && c->family == family && c->queue == queue) return true;
     // History and generated images are shared by the slots. A queue switch
     // must finish every submission using them, even within the same family.
@@ -625,7 +628,10 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateSwapchainKHR(VkDevice device, const VkSw
     VkSurfaceCapabilitiesKHR caps{};
     const VkImageUsageFlags transfer=VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     uint32_t extra=factor()-1;
-    if(!compatible || !surface_caps ||
+    bool sdr=info->imageColorSpace==VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
+        (info->imageFormat==VK_FORMAT_R8G8B8A8_UNORM || info->imageFormat==VK_FORMAT_B8G8R8A8_UNORM ||
+         info->imageFormat==VK_FORMAT_R8G8B8A8_SRGB || info->imageFormat==VK_FORMAT_B8G8R8A8_SRGB);
+    if(!compatible || !sdr || !surface_caps ||
        surface_caps(physical,info->surface,&caps)!=VK_SUCCESS ||
        (caps.supportedUsageFlags & transfer)!=transfer ||
        info->minImageCount>UINT32_MAX-extra ||

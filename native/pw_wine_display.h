@@ -30,6 +30,24 @@ int pw_wine_input_owned_post(PwWineInputOwners *owners, unsigned owner,
 int pw_wine_input_release_source(PwWineInputOwners *owners, unsigned source,
                                   int (*sink)(const PwWineInput *));
 uint32_t pw_wine_capture_buttons(uint32_t held, uint32_t *withheld, int captured);
+/* Delivery keeps a complete input tick in order while the Wine sink is full.
+ * Callers must drain it before producing the next tick. Overflow is fatal to
+ * the session rather than silently forgetting a release. */
+enum { PW_INPUT_DELIVERY_CAPACITY = 1024 };
+typedef struct PwWineInputDelivery {
+    PwWineInputOwners owners;
+    struct { PwWineInput event; unsigned source; } pending[PW_INPUT_DELIVERY_CAPACITY];
+    size_t first, count;
+    int overflow;
+} PwWineInputDelivery;
+int pw_wine_input_enqueue(PwWineInputDelivery *, unsigned, const PwWineInput *);
+int pw_wine_input_drain(PwWineInputDelivery *, int (*)(const PwWineInput *));
+int pw_wine_input_enqueue_release(PwWineInputDelivery *, unsigned);
+/* One capture decision per tick, retained through OSK completion. All
+ * secondary controller routes share its withholding state. */
+typedef struct PwWineInputSession { int captured; uint32_t withheld[3]; } PwWineInputSession;
+void pw_wine_input_session_begin(PwWineInputSession *, int menu, int dialog);
+uint32_t pw_wine_input_session_buttons(PwWineInputSession *, unsigned slot, uint32_t held);
 /* Button edges aggregate duplicate bindings before ownership routing. */
 typedef struct PwWineButtonState { uint32_t held; } PwWineButtonState;
 

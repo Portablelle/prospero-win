@@ -33,6 +33,13 @@ static void test_settings_regressions(const char *root)
     assert(pw_game_profile_parse((const uint8_t*)out,strlen(out),&parsed)==PW_OK);
     assert(parsed.input.keyboard_stick==PW_GAME_STICK_NONE);
     assert(parsed.input.stick_keys[0]=='W' && parsed.input.rumble==35);
+    s.row=1;s.mode=2;pw_settings_change(&s,1);assert(s.mode==3);
+    snprintf(text,sizeof(text),"%s",original);
+    char *runtime=strstr(text,"[runtime]");assert(runtime);
+    const char *p2="player2=mouse-p2\n";
+    memmove(runtime+strlen(p2),runtime,strlen(runtime)+1);memcpy(runtime,p2,strlen(p2));
+    assert(!pw_settings_text(&s,text,out,sizeof(out)));
+    assert(!strstr(out,"player2"));
     /* A missing preset cannot be turned into permanent fallback bindings. */
     strcpy(e.profile.input.preset,"missing");
     assert(pw_settings_open(&s,&e,root)==-1 && !s.open);

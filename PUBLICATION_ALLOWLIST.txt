@@ -658,3 +658,4 @@ wine/patches/0997-ntdll-check-stack-backing.patch
 wine/patches/0998-server-update-parked-descendants-on-rename.patch
 
 wine/patches/0974-ntdll-host-page-testing-override.patch
+wine/patches/0999-xinput-probe-secondary-arrivals-without-absence-cache.patch

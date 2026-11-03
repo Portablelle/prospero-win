@@ -209,7 +209,7 @@ game_slug: test-game
 runner: wine
 prospero:
   display: {desktop: 1920x1080, scaling: fit, show_fps: true, framegen: 2, refresh: 120, opengl_thread: true}
-  input: {preset: mouse, rumble: 50, player2: mouse-p2}
+  input: {preset: mouse, rumble: 50, player2: mouse-p2, keyboard_stick: left_stick, stick_up: w, stick_down: s, stick_left: a, stick_right: d, stick_deadzone: 25}
 script:
   game:
     exe: drive_c/Games/Test/game.exe
@@ -358,6 +358,13 @@ def check_reshade(root: Path, wine: Path, setup: Path, log: Path) -> None:
     profile = (library / "profiles" / "reshade-game.profile").read_text()
     assert "dll_overrides = d3d8,d3d9,d3d10core,d3d11,dxgi,d3dcompiler_47,ddraw=n" in profile.splitlines(), profile
 
+    assert "keyboard_stick = left_stick" in profile and "stick_deadzone = 25" in profile
+    assert install("reshade-builtin",script_text.replace("overrides: {ddraw.dll: n}","overrides: {d3d9: b}"))==1
+    assert not (library/"prefixes/reshade-builtin").exists()
+    collision=script_text.replace("  - write_config:",
+        '  - write_file: {file: "$GAMEDIR/drive_c/Games/Test/d3d9.dll", content: "existing-wrapper"}\n  - write_config:',1)
+    assert install("reshade-collision",collision)==1
+    assert (library/"prefixes/reshade-collision/drive_c/Games/Test/d3d9.dll").read_bytes()==b"existing-wrapper"
     # A 64-bit game gets the 64-bit build.
     (root / "setup64.exe").write_bytes(pe(64))
     (root / "setup64.exe.sh").write_text((root / "setup.exe.sh").read_text().replace(str(setup), str(root / "setup64.exe")))

@@ -79,7 +79,7 @@ Subject: [PATCH] ntdll: commit stack growth as one protection transaction
 +    {
 +        int restore_data = mprotect_range( page, size, 0, 0 );
 +        int restore_guard = guard ? mprotect_range( guard, host_page_size, 0, 0 ) : 0;
-+        if (restore_data || restore_guard) abort_thread(1);
++        if (restore_data || restore_guard) abort_process(1);
 +    }
 +    return STATUS_NO_MEMORY;
  }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "pw_game_profile.h"
 #include <string.h>
+#include <stdio.h>
 
 enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3,
        SET_PLAYER2 = 1u << 4, SET_RUMBLE = 1u << 5, SET_KEYBOARD_STICK = 1u << 6,
@@ -100,6 +101,25 @@ static int binding(const uint8_t *v, size_t n, PwGameBinding *out)
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
         if (is(v, n, keys[i].name)) { out->code = keys[i].vk; return PW_OK; }
     return PW_ERR_UNSUPPORTED;
+}
+
+const char *pw_game_button_name(size_t index)
+{ return index<PW_GAME_BUTTON_COUNT ? buttons[index].name : NULL; }
+int pw_game_binding_parse(const char *text,PwGameBinding *out)
+{ return text && out ? binding((const uint8_t*)text,strlen(text),out) : PW_ERR_PRECONDITION; }
+void pw_game_binding_text(const PwGameBinding *b,char *out,size_t cap)
+{
+    if(!b || !out || !cap) return;
+    if(b->kind==PW_GAME_BIND_MOUSE) snprintf(out,cap,"%s",b->code==0?"mouse_left":b->code==1?"mouse_right":"mouse_middle");
+    else if(b->kind!=PW_GAME_BIND_KEY) snprintf(out,cap,"none");
+    else if(b->code>='A' && b->code<='Z') snprintf(out,cap,"%c",(char)(b->code+32));
+    else if(b->code>='0' && b->code<='9') snprintf(out,cap,"%c",(char)b->code);
+    else {
+        for(size_t i=0;i<sizeof(keys)/sizeof(keys[0]);i++)
+            if(b->code==keys[i].vk) { snprintf(out,cap,"%s",keys[i].name);return; }
+        if(b->code>=0x70 && b->code<=0x87) snprintf(out,cap,"f%u",b->code-0x6f);
+        else snprintf(out,cap,"vk:0x%02X",b->code);
+    }
 }
 
 /* A preset's name: the file name under input/ without .input. */
@@ -574,6 +594,35 @@ void pw_game_input_init(PwGameInput *input)
     input->stick_keys[2] = 'A';
     input->stick_keys[3] = 'D';
     for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++) input->bindings[i].mask = buttons[i].mask;
+}
+
+void pw_game_input_layout(PwGameInput *input,PwGameInputLayout layout)
+{
+    if(!input) return;
+    unsigned speed=input->mouse_speed,rumble=input->rumble,deadzone=input->stick_deadzone;
+    pw_game_input_init(input);
+    input->mouse_speed=speed;input->rumble=rumble;input->stick_deadzone=(uint8_t)deadzone;
+    input->mode=layout==PW_GAME_LAYOUT_XINPUT ? PW_GAME_INPUT_XINPUT : PW_GAME_INPUT_KEYBOARD;
+    // Entries use the canonical button indices from this model's table.
+    static const struct { unsigned index; uint8_t kind; uint16_t code; } dual[]={
+        {0,PW_GAME_BIND_KEY,32},{1,PW_GAME_BIND_KEY,17},{2,PW_GAME_BIND_KEY,'E'},
+        {3,PW_GAME_BIND_KEY,'F'},{7,PW_GAME_BIND_MOUSE,0},{6,PW_GAME_BIND_MOUSE,1},
+        {8,PW_GAME_BIND_KEY,16},{5,PW_GAME_BIND_KEY,'R'},{4,PW_GAME_BIND_KEY,'V'},
+        {14,PW_GAME_BIND_KEY,27},{16,PW_GAME_BIND_KEY,13}},
+      mouse[]={ {0,PW_GAME_BIND_MOUSE,0},{7,PW_GAME_BIND_MOUSE,0},{2,PW_GAME_BIND_MOUSE,1},
+        {1,PW_GAME_BIND_KEY,27},{3,PW_GAME_BIND_KEY,13},{14,PW_GAME_BIND_KEY,27} };
+    for(size_t i=0;i<PW_GAME_BUTTON_COUNT;i++) input->bindings[i].kind=PW_GAME_BIND_NONE;
+    if(layout==PW_GAME_LAYOUT_DUAL_STICK) {
+        input->keyboard_stick=PW_GAME_STICK_LEFT;input->mouse=PW_GAME_STICK_RIGHT;
+        for(size_t i=0;i<sizeof(dual)/sizeof(dual[0]);i++) {
+            input->bindings[dual[i].index].kind=dual[i].kind;input->bindings[dual[i].index].code=dual[i].code;
+        }
+    } else if(layout==PW_GAME_LAYOUT_MOUSE) {
+        input->mouse=PW_GAME_STICK_LEFT;
+        for(size_t i=0;i<sizeof(mouse)/sizeof(mouse[0]);i++) {
+            input->bindings[mouse[i].index].kind=mouse[i].kind;input->bindings[mouse[i].index].code=mouse[i].code;
+        }
+    }
 }
 
 int pw_game_profile_parse(const uint8_t *bytes, size_t length, PwGameProfile *profile)

@@ -393,12 +393,14 @@ static void *(*wine_dlsym_fn)(void *, const char *);
 /* The console's on-screen keyboard (native/pw_osk_ps5.h): a dialog still up
  * when the title leaves the game is ended with it. */
 static PwOskPs5 osk_ps5;
-static PwWineInputOwners key_owners;
+static PwWineInputDelivery input_delivery;
 static unsigned key_source;
 static int (*raw_post_input)(const PwWineInput *);
 static int owned_post_input(const PwWineInput *input)
 {
-    return pw_wine_input_owned_post(&key_owners, key_source, raw_post_input, input);
+    int result=pw_wine_input_enqueue(&input_delivery,key_source,input);
+    (void)pw_wine_input_drain(&input_delivery,raw_post_input);
+    return result;
 }
 
 
@@ -1091,7 +1093,8 @@ int main(int argc, char **argv)
     PwWinePointer pointer = { 0, 0 };
     PwWineKeyboardStick keyboard_stick_state = { 0 };
     PwWineButtonState button_state = {0}, button_state2 = {0};
-    uint32_t pad2_withheld = 0;
+    PwWineInputSession input_session = {0};
+    uint64_t input_blocked_since = 0;
     int hid_captured = 0;
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
@@ -1102,7 +1105,6 @@ int main(int argc, char **argv)
      * i feeds controller i+1. */
     static PwPadPlayers players;
     static uint8_t players_fed[PW_PAD_PLAYERS];
-    uint32_t players_withheld[PW_PAD_PLAYERS] = {0};
     void (*set_pad_at)(uint32_t, const PwWinePad *) = NULL;
     int (*rumble_at)(uint32_t, uint32_t *, uint32_t *) = NULL;
     uint32_t (*pads_wanted)(void) = NULL;
@@ -1468,6 +1470,22 @@ int main(int argc, char **argv)
 #endif
     for (uint64_t tick = 1; status == PW_OK; tick++) {
         uint64_t now = now_ns();
+        if(input_delivery.overflow) {
+            PS5LOG_LOG("PW_WINE64 input delivery overflow: leaving the game");
+            restart_title(NULL,launch.cycle+1u,"input-overflow");
+            break;
+        }
+        if(raw_post_input && pw_wine_input_drain(&input_delivery,raw_post_input)) {
+            if(!input_blocked_since) input_blocked_since=now;
+            if(now-input_blocked_since>=2000000000ull) {
+                PS5LOG_LOG("PW_WINE64 input sink stalled: leaving the game");
+                restart_title(NULL,launch.cycle+1u,"input-stalled");
+                break;
+            }
+            usleep(PW_WINE64_TICK_US);
+            continue;
+        }
+        input_blocked_since=0;
         pw_diagnostics_tick(now);
         PwPresentView view;
         /* +4 stick transitions (keyboard_stick) and +1 pointer move. */
@@ -1486,7 +1504,7 @@ int main(int argc, char **argv)
              * Releases still are, so nothing stays held. */
             int dialog = osk_ps5.showing;
             if(dialog && !hid_captured) {
-                if(pw_wine_input_release_source(&key_owners,PW_INPUT_HID,raw_post_input)) refused++;
+                if(pw_wine_input_enqueue_release(&input_delivery,PW_INPUT_HID)) refused++;
                 else hid_captured=1;
             }
             if(!dialog) hid_captured=0;
@@ -1569,7 +1587,8 @@ int main(int argc, char **argv)
          * closed them stay theirs until they are let go. Closing the game
          * below still reads the real pad. */
         const PwPadPs5 *seen = &pad;
-        int menu_open = 0;
+        int menu_open = game_menu.open;
+        const int capture_at_start=menu_open || osk.state==PW_OSK_OPENING || osk.state==PW_OSK_SHOWN;
         if (pad_read && (set_menu || osk_status == PW_OK)) {
             uint32_t held = pad.core.previous_buttons, pressed = pad.core.pressed_edges,
                      released = pad.core.released_edges;
@@ -1608,6 +1627,8 @@ int main(int argc, char **argv)
             }
             seen = &game_pad;
         }
+        pw_wine_input_session_begin(&input_session,menu_open || capture_at_start,
+            osk.state==PW_OSK_OPENING || osk.state==PW_OSK_SHOWN || osk_ps5.showing);
         /* XInput controller 0: the DualSense, and in a script build the
          * macro's controller added to it, every frame, so a scripted press
          * stays down until its release. */
@@ -1650,17 +1671,15 @@ int main(int argc, char **argv)
                 if (!player->opened) {
                     if (players_fed[i]) set_pad_at(i + 1, NULL);
                     players_fed[i] = 0;
-                    players_withheld[i] = 0;
+                    input_session.withheld[i] = 0;
                     continue;
                 }
                 const PwPadPs5 *read = pw_pad_ps5_read(player) == PW_OK ? player : NULL;
-                int captured = menu_open || osk.state == PW_OSK_OPENING || osk.state == PW_OSK_SHOWN;
-                uint32_t buttons = pw_wine_capture_buttons(read ? read->core.previous_buttons : 0,
-                                                          &players_withheld[i], captured);
+                uint32_t buttons = pw_wine_input_session_buttons(&input_session,i,read ? read->core.previous_buttons : 0);
                 if (read) {
                     idle = *player;
                     idle.core.previous_buttons = buttons;
-                    if (captured) {
+                    if (input_session.captured) {
                     idle.left_stick.x = idle.left_stick.y = 0x80;
                     idle.right_stick.x = idle.right_stick.y = 0x80;
                     idle.l2 = idle.r2 = 0;
@@ -1773,10 +1792,9 @@ int main(int argc, char **argv)
                 pressed2 = pad2.core.pressed_edges;
                 released2 = pad2.core.released_edges;
             }
-            int captured = menu_open || osk.state==PW_OSK_OPENING || osk.state==PW_OSK_SHOWN;
-            held2 = pw_wine_capture_buttons(held2,&pad2_withheld,captured);
-            pressed2 &= captured ? 0 : ~pad2_withheld;
-            released2 &= captured ? 0 : ~pad2_withheld;
+            held2 = pw_wine_input_session_buttons(&input_session,0,held2);
+            pressed2 &= input_session.captured ? 0 : ~input_session.withheld[0];
+            released2 &= input_session.captured ? 0 : ~input_session.withheld[0];
             size_t count2 = pw_wine_game_inputs(&button_state2,&game_input2,held2,
                                                 pressed2 | (held2 & ~button_state2.held),
                                                 released2 | (button_state2.held & ~held2),events,
