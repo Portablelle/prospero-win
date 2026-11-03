@@ -1,0 +1,14 @@
+native/wine64_main.c
+  h_20ba7e744b2e01 398,400,1515,1520,1528,1538,1562,1715,1734,1742,1765,1792,1865
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c8f825953200f692f164365b6410962c0bbb484",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
