@@ -393,12 +393,12 @@ static void *(*wine_dlsym_fn)(void *, const char *);
 /* The console's on-screen keyboard (native/pw_osk_ps5.h): a dialog still up
  * when the title leaves the game is ended with it. */
 static PwOskPs5 osk_ps5;
-static PwWineKeyOwners key_owners;
+static PwWineInputOwners key_owners;
 static unsigned key_source;
 static int (*raw_post_input)(const PwWineInput *);
 static int owned_post_input(const PwWineInput *input)
 {
-    return pw_wine_key_owned_post(&key_owners, key_source, raw_post_input, input);
+    return pw_wine_input_owned_post(&key_owners, key_source, raw_post_input, input);
 }
 
 
@@ -1090,6 +1090,9 @@ int main(int argc, char **argv)
     int scaling = PW_PRESENT_SCALE_FIT;
     PwWinePointer pointer = { 0, 0 };
     PwWineKeyboardStick keyboard_stick_state = { 0 };
+    PwWineButtonState button_state = {0}, button_state2 = {0};
+    uint32_t pad2_withheld = 0;
+    int hid_captured = 0;
     int (*post_input)(const PwWineInput *) = NULL;
     void (*set_pad)(const PwWinePad *) = NULL;
     int (*rumble)(uint32_t *, uint32_t *) = NULL;
@@ -1473,6 +1476,7 @@ int main(int argc, char **argv)
         /* The USB keyboard and mouse; one plugged in later is found by a
          * retry every few seconds. */
         if (post_input && hid.ops.load_module) {
+            key_source = PW_INPUT_HID;
             PwHidPs5Poll poll;
             PwWineInput input;
             /* While the console's keyboard is up the USB keyboard writes
@@ -1480,6 +1484,11 @@ int main(int argc, char **argv)
              * the game's then, or the line would reach the game twice.
              * Releases still are, so nothing stays held. */
             int dialog = osk_ps5.showing;
+            if(dialog && !hid_captured) {
+                if(pw_wine_input_release_source(&key_owners,PW_INPUT_HID,raw_post_input)) refused++;
+                else hid_captured=1;
+            }
+            if(!dialog) hid_captured=0;
 
             if (tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
                 hid_status = pw_hid_ps5_retry(&hid);
@@ -1505,6 +1514,7 @@ int main(int argc, char **argv)
             }
         }
 #if PW_WINE64_SCRIPT
+        key_source = PW_INPUT_SCRIPT;
         while (post_input && script_key_next < script_key_count &&
                now - script_start_ns >= script_keys[script_key_next].at_ns) {
             PwWineInput press = { PW_WINE_INPUT_KEY, script_keys[script_key_next].vk, 0, 0, 1 };
@@ -1543,6 +1553,7 @@ int main(int argc, char **argv)
             }
         }
 #endif
+        key_source = PW_INPUT_PAD;
         int pad_read = pad_status == PW_OK && post_input && pw_pad_ps5_read(&pad) == PW_OK;
         if (pad_read) {
             static int pad_state = -1;
@@ -1657,13 +1668,14 @@ int main(int argc, char **argv)
             }
         }
         if (pad_read) {
-            size_t count = pw_wine_game_inputs(&game_input, seen->core.pressed_edges,
+            size_t count = pw_wine_game_inputs(&button_state, &game_input, seen->core.pressed_edges,
                                                seen->core.released_edges, events,
                                                sizeof(events) / sizeof(events[0]) - 5);
+            size_t binding_count = count;
             /* [input] keyboard_stick: one stick drives the four direction
              * keys (WASD by default), for games that read the keyboard for
              * movement and cannot use a stick axis. */
-            if (game_input.keyboard_stick != PW_GAME_STICK_NONE || game_input.left_stick_wasd) {
+            if (game_input.keyboard_stick != PW_GAME_STICK_NONE) {
                 const PwPadPs5Stick *key_stick =
                     game_input.keyboard_stick == PW_GAME_STICK_RIGHT ?
                     &seen->right_stick : &seen->left_stick;
@@ -1679,6 +1691,7 @@ int main(int argc, char **argv)
                                                       PW_WINE64_TICK_US, &events[count]);
             }
             for (size_t i = 0; i < count; i++) {
+                key_source = i < binding_count ? PW_INPUT_PAD : PW_INPUT_STICK;
                 if (post_input(&events[i]) == 0) posted++;
                 else refused++;
             }
@@ -1694,7 +1707,14 @@ int main(int argc, char **argv)
                                (unsigned)left, (unsigned)right, (unsigned)game_input.rumble,
                                pw_result_name(vibrate), pad.vibration_rc, pad.trigger_rc);
             }
-        } else if (keyboard_stick_state.held && post_input) {
+        } else if (post_input) {
+            key_source = PW_INPUT_PAD;
+            size_t releases = pw_wine_game_inputs(&button_state,&game_input,0,button_state.held,
+                                                  events,sizeof(events)/sizeof(events[0]));
+            for(size_t i=0;i<releases;i++) {
+                if(post_input(&events[i])==0) posted++; else refused++;
+            }
+            key_source = PW_INPUT_STICK;
             /* The pad stopped reporting with directions held: release them
              * so the game is not left walking into a wall. */
             size_t count = pw_wine_keyboard_stick_step(&game_input, 0x80, 0x80, 0,
@@ -1722,13 +1742,13 @@ int main(int argc, char **argv)
                 if (ended) pw_osk_finished(&osk, ended == 1 ? typed : NULL);
             }
             count = pw_osk_keys(&osk, osk_keys, sizeof(osk_keys) / sizeof(osk_keys[0]));
-            key_source = 1;
+            key_source = PW_INPUT_OSK;
             for (size_t i = 0; i < count; i++) {
                 PwWineInput input = { PW_WINE_INPUT_KEY, osk_keys[i].vk, 0, 0, osk_keys[i].down };
                 if (post_input(&input) == 0) posted++;
                 else refused++;
             }
-            key_source = 0;
+            key_source = PW_INPUT_HID;
         }
         /* The second player's pad: keys only, through its own preset, read
          * whether or not the first pad's read worked. A user who signs in
@@ -1738,15 +1758,20 @@ int main(int argc, char **argv)
          * pad's. */
         if (player2 && post_input) {
             const uint64_t retry = 3 * PW_WINE64_TICKS_PER_S;
+            key_source = PW_INPUT_PAD2;
+            uint32_t held2 = 0;
             if (pad2_status == PW_OK && pw_pad_ps5_read(&pad2) == PW_OK) {
                 if (pad2.core.connected) pad2_seen = tick;
-                size_t count2 = pw_wine_game_inputs(&game_input2, pad2.core.pressed_edges,
-                                                    pad2.core.released_edges, events,
-                                                    sizeof(events) / sizeof(events[0]) - 1);
-                for (size_t i = 0; i < count2; i++) {
-                    if (post_input(&events[i]) == 0) posted++;
-                    else refused++;
-                }
+                held2 = pad2.core.previous_buttons;
+            }
+            int captured = menu_open || osk.state==PW_OSK_OPENING || osk.state==PW_OSK_SHOWN;
+            held2 = pw_wine_capture_buttons(held2,&pad2_withheld,captured);
+            size_t count2 = pw_wine_game_inputs(&button_state2,&game_input2,
+                                                held2 & ~button_state2.held,
+                                                button_state2.held & ~held2,events,
+                                                sizeof(events)/sizeof(events[0]));
+            for(size_t i=0;i<count2;i++) {
+                if(post_input(&events[i])==0) posted++; else refused++;
             }
             int32_t after = -1;
             if (pad2_status == PW_OK && !pad2.core.connected && tick - pad2_seen >= retry) {

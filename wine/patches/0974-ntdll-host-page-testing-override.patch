@@ -1,0 +1,122 @@
+From: Prospero Win local fixes <prospero-win@local>
+Subject: [PATCH] ntdll: retain host-page-size override for stack tests only
+
+Keep the host geometry test override from the old 0974 patch, without
+subpage protection, hot-page permission changes, or internal single-stepping.
+
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -3167,13 +3167,13 @@ void signal_init_process( TEB *teb )
+ 
+     /* sneak in a syscall dispatcher pointer at a fixed address (7ffe1000) */
+     ptr = (char *)user_shared_data + page_size;
+-    if ((size_t)sysconf( _SC_PAGESIZE ) > page_size)
++    if (virtual_host_page_size() > page_size)
+     {
+         /* With host pages larger than 4 KiB (16 KiB on PS5) this slot shares
+          * a host page with KUSER_SHARED_DATA, which is already mapped as a
+          * read-only view of the USD section (the server sizes that section
+          * to a host page). Store the pointer through that view. */
+-        const size_t host_page = sysconf( _SC_PAGESIZE );
++        const size_t host_page = virtual_host_page_size();
+ 
+         mprotect( user_shared_data, host_page, PROT_READ | PROT_WRITE );
+         *(void **)ptr = __wine_syscall_dispatcher;
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -332,7 +332,8 @@ extern NTSTATUS virtual_alloc_thread_stack( INITIAL_TEB *stack, ULONG_PTR limit_
+                                             SIZE_T reserve_size, SIZE_T commit_size, BOOL guard_page );
+ extern void virtual_map_user_shared_data(void);
+ extern void virtual_init_user_shared_data(void);
++extern SIZE_T virtual_host_page_size(void);
+ extern NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, void *stack );
+ extern unsigned int virtual_locked_server_call( void *req_ptr );
+ extern ssize_t virtual_locked_read( int fd, void *addr, size_t size );
+ extern ssize_t virtual_locked_pread( int fd, void *addr, size_t size, off_t offset );
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -401,8 +401,9 @@ static const UINT_PTR page_mask = 0xfff;
+ static const UINT_PTR granularity_mask = 0xffff;
+ 
+ /* PS5 hosts use 16 KiB pages: keep 4 KiB Windows pages over a larger host
+- * page, the same scheme as 16 KiB-page aarch64 hosts. */
+-#if defined(__aarch64__) || defined(__PROSPERO__)
++ * page, the same scheme as 16 KiB-page aarch64 hosts. An x86-64 PC can keep
++ * larger host pages too (WINE_HOST_PAGE_SIZE), to run the console's scheme. */
++#if defined(__aarch64__) || defined(__PROSPERO__) || defined(__x86_64__)
+ static UINT_PTR host_page_size;
+ static UINT_PTR host_page_mask;
+ #else
+@@ -668,6 +669,16 @@ static void mmap_add_reserved_area( void *addr, SIZE_T size )
+     struct list *ptr, *next;
+     void *end, *area_end;
+ 
++#if defined(__x86_64__) && !defined(__PROSPERO__)
++    if (host_page_size > page_size)  /* WINE_HOST_PAGE_SIZE: the preloader's areas are 4 KiB-aligned */
++    {
++        char *start = ROUND_ADDR( (char *)addr + host_page_mask, host_page_mask );
++        char *limit = ROUND_ADDR( (char *)addr + size, host_page_mask );
++        if (limit <= start) return;
++        size = limit - start;
++        addr = start;
++    }
++#endif
+     assert( !((UINT_PTR)addr & host_page_mask) );
+     assert( !(size & host_page_mask) );
+ 
+@@ -1387,6 +1398,17 @@ static BYTE get_page_vprot( const void *addr )
+ }
+ 
+ 
++/***********************************************************************
++ *           virtual_host_page_size
++ *
++ * The host page Wine keeps: the system's, or a larger one (WINE_HOST_PAGE_SIZE).
++ */
++SIZE_T virtual_host_page_size(void)
++{
++    return host_page_size;
++}
++
++
+ /***********************************************************************
+  *           get_host_page_vprot
+  *
+@@ -4090,8 +4112,15 @@ void virtual_init(void)
+     pthread_mutex_init( &virtual_mutex, &attr );
+     pthread_mutexattr_destroy( &attr );
+ 
+-#if defined(__aarch64__) || defined(__PROSPERO__)
++#if defined(__aarch64__) || defined(__PROSPERO__) || defined(__x86_64__)
+     host_page_size = sysconf( _SC_PAGESIZE );
++#if defined(__x86_64__) && !defined(__PROSPERO__)
++    {
++        const char *env = getenv( "WINE_HOST_PAGE_SIZE" );
++        UINT_PTR size = env ? strtoul( env, NULL, 0 ) : 0;
++        if (size > host_page_size && size <= 0x10000 && !(size & (size - 1))) host_page_size = size;
++    }
++#endif
+     host_page_mask = host_page_size - 1;
+     TRACE( "host page size: %uk\n", (UINT)host_page_size / 1024 );
+ #endif
+diff --git a/server/mapping.c b/server/mapping.c
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -225,6 +225,14 @@ static inline mem_size_t round_size( mem_size_t size, mem_size_t mask )
+ void init_memory(void)
+ {
+     host_page_mask = sysconf( _SC_PAGESIZE ) - 1;
++#if defined(__x86_64__) && !defined(__PROSPERO__)
++    {
++        /* ntdll's WINE_HOST_PAGE_SIZE: sections are sized to the host page it keeps */
++        const char *env = getenv( "WINE_HOST_PAGE_SIZE" );
++        unsigned long size = env ? strtoul( env, NULL, 0 ) : 0;
++        if (size > host_page_mask + 1 && size <= 0x10000 && !(size & (size - 1))) host_page_mask = size - 1;
++    }
++#endif
+     free_map_addr( 0x60000000, 0x1c000000 );
+     free_map_addr( 0x600000000000, 0x100000000000 );
+ }

@@ -67,15 +67,15 @@ void pw_settings_change(PwLauncherSettings *s,int d)
         snprintf(s->status,sizeof(s->status),"%s",i==3?"4K: ECRAN ET SORTIE PS5 2160P REQUIS - FLUIDITE A TESTER":"MODIFICATIONS APPLIQUEES AU PROCHAIN LANCEMENT");
     }else if(s->row==1){
         s->mode=s->mode==0?(d>0?1:4):1+(s->mode-1+(d>0?1:3))%4;
-        unsigned speed=s->input.mouse_speed;
+        unsigned speed=s->input.mouse_speed, rumble=s->input.rumble, deadzone=s->input.stick_deadzone;
         pw_game_input_init(&s->input);
-        s->input.mouse_speed=speed;
+        s->input.mouse_speed=speed; s->input.rumble=rumble; s->input.stick_deadzone=(uint8_t)deadzone;
         const char *layout=s->mode==1?
-            "[input]\nmode=keyboard\nleft_stick=wasd\nmouse=right_stick\ncross=space\ncircle=ctrl\nsquare=e\ntriangle=f\nr2=mouse_left\nl2=mouse_right\nl3=shift\nr1=r\nl1=v\noptions=escape\ntouchpad=enter\n":s->mode==2?
-            "[input]\nmode=keyboard\nleft_stick=none\nmouse=left_stick\ncross=mouse_left\nr2=mouse_left\nsquare=mouse_right\ncircle=escape\ntriangle=enter\noptions=escape\n":s->mode==3?
-            "[input]\nmode=xinput\nleft_stick=none\nmouse=none\n":"[input]\nmode=keyboard\nleft_stick=none\nmouse=none\n";
+            "[input]\nmode=keyboard\nkeyboard_stick=left_stick\nmouse=right_stick\ncross=space\ncircle=ctrl\nsquare=e\ntriangle=f\nr2=mouse_left\nl2=mouse_right\nl3=shift\nr1=r\nl1=v\noptions=escape\ntouchpad=enter\n":s->mode==2?
+            "[input]\nmode=keyboard\nkeyboard_stick=none\nmouse=left_stick\ncross=mouse_left\nr2=mouse_left\nsquare=mouse_right\ncircle=escape\ntriangle=enter\noptions=escape\n":s->mode==3?
+            "[input]\nmode=xinput\nkeyboard_stick=none\nmouse=none\n":"[input]\nmode=keyboard\nkeyboard_stick=none\nmouse=none\n";
         pw_game_input_parse((const uint8_t *)layout,strlen(layout),&s->input);
-        s->input.mouse_speed=speed;
+        s->input.mouse_speed=speed; s->input.rumble=rumble; s->input.stick_deadzone=(uint8_t)deadzone;
     }else if(s->row==2){
         int speed=(int)s->input.mouse_speed+(d>0?100:-100);if(speed<100)speed=100;if(speed>5000)speed=5000;s->input.mouse_speed=(unsigned)speed;
     }else if(s->row>=3&&s->row<20){
@@ -98,16 +98,17 @@ static int set(char *text,size_t cap,const char *section,const char *key,const c
         const char *end=strchr(p,'\n');size_t len=end?(size_t)(end-p)+1:strlen(p);
         const char *q=p;while(q<p+len&&(*q==' '||*q=='\t'))q++;
         if(*q=='['){
-            if(inside&&!found){int n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;found=1;}
+            if(inside&&!found&&value){int n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;found=1;}
             inside=!strncasecmp(q,sec,strlen(sec));if(inside)seen=1;
         }
         int match=0;
         if(inside&&!strncasecmp(q,key,strlen(key))){const char *v=q+strlen(key);while(*v==' '||*v=='\t')v++;match=*v=='=';}
-        if(match){int n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;found=1;}
+        if(match&&!value){found=1;}
+        else if(match){int n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;found=1;}
         else {if(used+len+2>=sizeof(tmp))return -1;memcpy(tmp+used,p,len);used+=len;if(!end)tmp[used++]='\n';}
         p+=len;
     }
-    if(!found){int n=snprintf(tmp+used,sizeof(tmp)-used,seen?"%s = %s\n":"[%s]\n",seen?key:section,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;
+    if(!found&&value){int n=snprintf(tmp+used,sizeof(tmp)-used,seen?"%s = %s\n":"[%s]\n",seen?key:section,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;
         if(!seen){n=snprintf(tmp+used,sizeof(tmp)-used,"%s = %s\n",key,value);if(n<0||(size_t)n>=sizeof(tmp)-used)return -1;used+=(size_t)n;}}
     if(used>=cap)return -1;
     tmp[used]=0;memcpy(text,tmp,used+1);return 0;
@@ -137,7 +138,7 @@ int pw_settings_text(const PwLauncherSettings *s,const char *original,char *out,
     if(s->resolution_changed){snprintf(val,sizeof(val),"%ux%u",s->draft.display.width,s->draft.display.height);if(set(out,cap,"display","desktop",val))return -1;
         strcpy(args,s->draft.app.arguments);if(resolution_args(args,sizeof(args),s->draft.display.width,s->draft.display.height)||set(out,cap,"application","arguments",args))return -1;}
     if(set(out,cap,"input","mode",s->input.mode==PW_GAME_INPUT_XINPUT?"xinput":"keyboard")||
-       set(out,cap,"input","left_stick",s->input.left_stick_wasd?"wasd":"none")||
+       set(out,cap,"input","left_stick",NULL)||
        set(out,cap,"input","mouse",s->input.mouse==PW_GAME_STICK_LEFT?"left_stick":s->input.mouse==PW_GAME_STICK_RIGHT?"right_stick":"none"))return -1;
     snprintf(val,sizeof(val),"%u",s->input.mouse_speed);if(set(out,cap,"input","mouse_speed",val))return -1;
     if(set(out,cap,"input","keyboard_stick",s->input.keyboard_stick==PW_GAME_STICK_LEFT?"left_stick":s->input.keyboard_stick==PW_GAME_STICK_RIGHT?"right_stick":"none"))return -1;

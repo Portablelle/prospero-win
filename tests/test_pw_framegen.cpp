@@ -51,6 +51,9 @@ static VkResult VKAPI_CALL present(VkQueue,const VkPresentInfoKHR *info)
     assert(info->pWaitSemaphores[0]==chain.ready[image]);
     assert(!pending[image]);pending[image]=true;presents++;return VK_SUCCESS;
 }
+static unsigned swapchain_attempts;
+static VkResult VKAPI_CALL create_swapchain(VkDevice,const VkSwapchainCreateInfoKHR*,const VkAllocationCallbacks*,VkSwapchainKHR*)
+{ swapchain_attempts++; return VK_ERROR_INITIALIZATION_FAILED; }
 static VkResult VKAPI_CALL create_device(VkPhysicalDevice,const VkDeviceCreateInfo*,const VkAllocationCallbacks*,VkDevice *device)
 { *device=handle<VkDevice>(77);return VK_SUCCESS; }
 static void VKAPI_CALL destroy_device(VkDevice,const VkAllocationCallbacks*) {}
@@ -97,5 +100,21 @@ int main()
         fg_DestroyDevice(device,nullptr);assert(!physical_of(device));
         assert(family_of(queue)==0);
     }
+    real_CreateSwapchainKHR=create_swapchain;factor_setting=2;
+    VkSwapchainCreateInfoKHR recreate{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    recreate.oldSwapchain=handle<VkSwapchainKHR>(3);VkSwapchainKHR output;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==1);
+    recreate.oldSwapchain=VK_NULL_HANDLE;
+    assert(fg_CreateSwapchainKHR(handle<VkDevice>(1),&recreate,nullptr,&output)==VK_ERROR_INITIALIZATION_FAILED);
+    assert(swapchain_attempts==3);
+    VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    VkPhysicalDeviceVulkan13Features core{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    device_info.pNext=&core;
+    assert(!maintenance4_enabled(&device_info));core.maintenance4=VK_TRUE;
+    assert(maintenance4_enabled(&device_info));
+    VkPhysicalDeviceMaintenance4Features extension{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES};
+    device_info.pNext=&extension;extension.maintenance4=VK_TRUE;
+    assert(maintenance4_enabled(&device_info));
     puts("framegen: nonblocking acquisition, all waits, image-owned semaphores, failed submit retirement and device reuse passed");
 }

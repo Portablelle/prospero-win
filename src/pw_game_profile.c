@@ -4,7 +4,7 @@
 
 enum { SET_MODE = 1u << 0, SET_MOUSE = 1u << 1, SET_SPEED = 1u << 2, SET_PRESET = 1u << 3,
        SET_PLAYER2 = 1u << 4, SET_RUMBLE = 1u << 5, SET_KEYBOARD_STICK = 1u << 6,
-       SET_STICK_DEADZONE = 1u << 7, SET_MOVE = 1u << 8 };
+       SET_STICK_DEADZONE = 1u << 7, SET_STICK_ALIAS = 1u << 8 };
 /* keyboard_stick names the stick that drives the four direction keys; the
  * keys themselves are stick_up/down/left/right, defaulting to WASD. */
 enum { STICK_UP = 1u << 0, STICK_DOWN = 1u << 1, STICK_LEFT = 1u << 2, STICK_RIGHT = 1u << 3 };
@@ -154,12 +154,16 @@ static int input_field(PwGameInput *input, const uint8_t *key, size_t key_length
         input->set |= SET_MOUSE;
         return PW_OK;
     }
+    /* Legacy spelling is normalized here; only keyboard_stick survives
+     * parsing. The explicit modern spelling wins within the same section. */
     if (is(key, key_length, "left_stick")) {
-        if (input->set & SET_MOVE) return PW_ERR_MALFORMED;
-        if (is(v, n, "wasd")) input->left_stick_wasd = 1;
-        else if (is(v, n, "none")) input->left_stick_wasd = 0;
+        PwGameStick stick;
+        if (input->set & SET_STICK_ALIAS) return PW_ERR_MALFORMED;
+        if (is(v,n,"wasd")) stick=PW_GAME_STICK_LEFT;
+        else if (is(v,n,"none")) stick=PW_GAME_STICK_NONE;
         else return PW_ERR_UNSUPPORTED;
-        input->set |= SET_MOVE;
+        if (!(input->set & SET_KEYBOARD_STICK)) input->keyboard_stick=stick;
+        input->set |= SET_STICK_ALIAS;
         return PW_OK;
     }
     if (is(key, key_length, "keyboard_stick")) {
@@ -622,10 +626,9 @@ void pw_game_input_overlay(PwGameInput *base, const PwGameInput *overrides)
     if (overrides->set & SET_MODE) base->mode = overrides->mode;
     if (overrides->set & SET_MOUSE) base->mouse = overrides->mouse;
     if (overrides->set & SET_SPEED) base->mouse_speed = overrides->mouse_speed;
-    if (overrides->set & SET_MOVE) base->left_stick_wasd = overrides->left_stick_wasd;
-    base->set |= overrides->set & (SET_MODE | SET_MOUSE | SET_SPEED | SET_MOVE);
+    base->set |= overrides->set & (SET_MODE | SET_MOUSE | SET_SPEED | SET_STICK_ALIAS);
     if (overrides->set & SET_RUMBLE) base->rumble = overrides->rumble;
-    if (overrides->set & SET_KEYBOARD_STICK) base->keyboard_stick = overrides->keyboard_stick;
+    if (overrides->set & (SET_KEYBOARD_STICK | SET_STICK_ALIAS)) base->keyboard_stick = overrides->keyboard_stick;
     if (overrides->set & SET_STICK_DEADZONE) base->stick_deadzone = overrides->stick_deadzone;
     for (size_t i = 0; i < 4; i++)
         if (overrides->stick_keys_set & (1u << i)) base->stick_keys[i] = overrides->stick_keys[i];
@@ -638,7 +641,7 @@ void pw_game_input_overlay(PwGameInput *base, const PwGameInput *overrides)
 
 void pw_game_input_default_mode(PwGameInput *input)
 {
-    if (!input || (input->set & SET_MODE) || input->mouse != PW_GAME_STICK_NONE || input->left_stick_wasd) return;
+    if (!input || (input->set & SET_MODE) || input->mouse != PW_GAME_STICK_NONE || input->keyboard_stick != PW_GAME_STICK_NONE) return;
     for (size_t i = 0; i < PW_GAME_BUTTON_COUNT; i++)
         if (input->bindings[i].kind != PW_GAME_BIND_UNSET) return;
     input->mode = PW_GAME_INPUT_XINPUT;

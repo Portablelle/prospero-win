@@ -115,7 +115,6 @@ typedef struct PwGameInput {
     PwGameInputMode mode;
     PwGameStick mouse;
     uint32_t mouse_speed;
-    int left_stick_wasd; /* opt-in keyboard movement, independent of mouse stick */
     uint32_t rumble;    /* percent of the game's vibration, 0..PW_GAME_RUMBLE_MAX */
     PwGameStick keyboard_stick;      /* digital key presses from this stick */
     uint8_t stick_deadzone;          /* percent, 5..70 */

@@ -2,16 +2,42 @@
 #include "pw_wine_display.h"
 #include <string.h>
 
-int pw_wine_key_owned_post(PwWineKeyOwners *owners, unsigned owner,
+int pw_wine_input_owned_post(PwWineInputOwners *owners, unsigned owner,
                            int (*sink)(const PwWineInput *), const PwWineInput *input)
 {
-    if (!owners || owner >= 2 || !sink || !input) return -1;
-    if (input->type != PW_WINE_INPUT_KEY || input->code >= 256) return sink(input);
-    uint8_t before = owners->held[input->code], bit = (uint8_t)(1u << owner);
+    if (!owners || owner >= PW_INPUT_SOURCES || !sink || !input) return -1;
+    uint8_t *held;
+    if (input->type == PW_WINE_INPUT_KEY && input->code < 256) held = &owners->keys[input->code];
+    else if (input->type == PW_WINE_INPUT_MOUSE_BUTTON && input->code < 3) held = &owners->mouse[input->code];
+    else return sink(input);
+    uint8_t before = *held, bit = (uint8_t)(1u << owner);
     uint8_t after = input->down ? before | bit : before & (uint8_t)~bit;
-    if (!!before != !!after && sink(input) != 0) return -1;
-    owners->held[input->code] = after;
+    /* Preserve key-down repeats/typing while coalescing releases. */
+    if ((input->down || !!before != !!after) && sink(input) != 0) return -1;
+    *held = after;
     return 0;
+}
+
+int pw_wine_input_release_source(PwWineInputOwners *owners, unsigned source,
+                                  int (*sink)(const PwWineInput *))
+{
+    if(!owners || source>=PW_INPUT_SOURCES || !sink) return -1;
+    uint8_t bit=(uint8_t)(1u<<source);
+    for(unsigned type=0;type<2;type++)
+        for(unsigned code=0;code<(type?3u:256u);code++) {
+            uint8_t held=type?owners->mouse[code]:owners->keys[code];
+            if(!(held&bit)) continue;
+            PwWineInput event={type?PW_WINE_INPUT_MOUSE_BUTTON:PW_WINE_INPUT_KEY,(uint16_t)code,0,0,0};
+            if(pw_wine_input_owned_post(owners,source,sink,&event)) return -1;
+        }
+    return 0;
+}
+uint32_t pw_wine_capture_buttons(uint32_t held, uint32_t *withheld, int captured)
+{
+    if(!withheld) return 0;
+    if(captured) *withheld |= held;
+    else *withheld &= held;
+    return captured?0:held & ~*withheld;
 }
 
 int pw_wine_frame_box_init(PwWineFrameBox *box, uint8_t *storage, size_t bytes)
@@ -81,37 +107,39 @@ int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
     return status;
 }
 
-static size_t add_edges(const PwGameInput *input, uint32_t edges, uint32_t down,
-                        PwWineInput *out, size_t used, size_t max)
+size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input,
+                           uint32_t pressed, uint32_t released, PwWineInput *out, size_t max)
 {
-    for (size_t i = 0; i < PW_GAME_BUTTON_COUNT && used < max; i++) {
-        const PwGameBinding *b = &input->bindings[i];
-        if (!(edges & b->mask) || (b->kind != PW_GAME_BIND_KEY && b->kind != PW_GAME_BIND_MOUSE))
-            continue;
-        out[used].type = b->kind == PW_GAME_BIND_KEY ? PW_WINE_INPUT_KEY : PW_WINE_INPUT_MOUSE_BUTTON;
-        out[used].code = b->code;
-        out[used].x = out[used].y = 0;
-        out[used].down = down;
-        used++;
-    }
+    if (!state || !input || !out) return 0;
+    uint32_t previous = state->held, next = (previous & ~released) | pressed;
+    size_t used = 0;
+    PwWineInput pending[2*PW_GAME_BUTTON_COUNT];
+    for (int down=0; down<=1; down++)
+        for(size_t i=0;i<PW_GAME_BUTTON_COUNT;i++) {
+            const PwGameBinding *binding=&input->bindings[i];
+            if(binding->kind!=PW_GAME_BIND_KEY && binding->kind!=PW_GAME_BIND_MOUSE) continue;
+            uint32_t mask=0;size_t j;
+            for(j=0;j<PW_GAME_BUTTON_COUNT;j++)
+                if(input->bindings[j].kind==binding->kind && input->bindings[j].code==binding->code) {
+                    if(j<i) break; /* this code's aggregate was already handled */
+                    mask |= input->bindings[j].mask;
+                }
+            if(j<PW_GAME_BUTTON_COUNT) continue;
+            int before=!!(previous&mask), after=!!(next&mask);
+            if(before!=after && after==down)
+                pending[used++]=(PwWineInput){binding->kind==PW_GAME_BIND_KEY?PW_WINE_INPUT_KEY:PW_WINE_INPUT_MOUSE_BUTTON,
+                                         binding->code,0,0,(uint32_t)down};
+        }
+    if(used>max) return 0;
+    memcpy(out,pending,used*sizeof(*out));
+    state->held=next;
     return used;
-}
-
-size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t released,
-                           PwWineInput *out, size_t max)
-{
-    size_t used;
-
-    if (!input || !out) return 0;
-    used = add_edges(input, released, 0, out, 0, max);
-    return add_edges(input, pressed, 1, out, used, max);
 }
 
 enum { KEY_STICK_UP = 1u << 0, KEY_STICK_DOWN = 1u << 1,
        KEY_STICK_LEFT = 1u << 2, KEY_STICK_RIGHT = 1u << 3 };
 
-/* One transition engine for configurable mappings and the legacy WASD
- * shorthand. The legacy thresholds (48/32) remain unchanged. */
+/* One transition engine; legacy profile spellings are normalized by the parser. */
 static size_t stick_keys_step(uint8_t *held, uint8_t x, uint8_t y, int connected,
                               int press, int release, const uint16_t keys[4],
                               PwWineInput *out, size_t max)
@@ -141,14 +169,12 @@ size_t pw_wine_keyboard_stick_step(const PwGameInput *input, uint8_t stick_x, ui
                                   int connected, PwWineKeyboardStick *state,
                                   PwWineInput *out, size_t max)
 {
-    static const uint16_t legacy_keys[4]={'W','S','A','D'};
     if (!input || !state) return 0;
-    int legacy=input->keyboard_stick==PW_GAME_STICK_NONE && input->left_stick_wasd;
     int threshold=(int)(127u*input->stick_deadzone/100u);
     return stick_keys_step(&state->held,stick_x,stick_y,
-                           connected && (legacy || input->keyboard_stick!=PW_GAME_STICK_NONE),
-                           legacy?48:threshold+1,legacy?32:threshold-4,
-                           legacy?legacy_keys:input->stick_keys,out,max);
+                           connected && input->keyboard_stick!=PW_GAME_STICK_NONE,
+                           threshold+1,threshold-4,
+                           input->stick_keys,out,max);
 }
 
 static const struct { uint32_t dualsense; uint16_t xinput; } pad_buttons[] = {
@@ -239,13 +265,4 @@ int pw_wine_pointer_step(PwWinePointer *pointer, uint8_t stick_x, uint8_t stick_
     pointer->y -= dy * 65536;
     *out = (PwWineInput){ PW_WINE_INPUT_MOUSE_MOVE, 0, (int32_t)dx, (int32_t)dy, 0 };
     return 1;
-}
-
-/* Compatibility entry point; the transition engine is shared above. */
-size_t pw_wine_movement_step(uint8_t *held, uint8_t x, uint8_t y,
-                             PwWineInput *out, size_t max)
-{
-    static const uint16_t keys[4]={'W','S','A','D'};
-    if (max < 4) return 0;
-    return stick_keys_step(held,x,y,1,48,32,keys,out,max);
 }

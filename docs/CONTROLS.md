@@ -231,3 +231,8 @@ and change parts of it: any line in the profile's own `[input]` section wins
 over the preset's. Put new presets in `/data/prospero-win/input/`, and
 consider sharing them in
 [prospero-win-profiles](https://github.com/mpereiraesaa/prospero-win-profiles).
+
+Legacy profiles spelling `left_stick = wasd` are parsed into the canonical
+`keyboard_stick = left_stick` mapping. Explicit `keyboard_stick` wins when
+both spellings occur in one section. Settings saves write only the canonical
+form; it uses the configured stick deadzone and direction keys.

@@ -2,7 +2,7 @@
 #ifndef PW_HID_PS5_H
 #define PW_HID_PS5_H
 /*
- * A USB keyboard and mouse on the PS5, read through the system's
+ * Native keyboards (USB or Bluetooth) and a mouse on the PS5, read through the system's
  * libSceKeyboard and libSceMouse, which the system loads as its modules
  * (sceSysmoduleLoadModule: a title may not load them by path, 0x80020063,
  * measured) and whose functions are then looked up (the payload SDK has no
@@ -63,9 +63,10 @@ typedef struct PwHidPs5Poll {
 /* Opens whichever of the keyboard and mouse the system has for user_id;
  * logs each step. PW_OK when either opened. */
 int pw_hid_ps5_open(PwHidPs5 *hid, const PwHidPs5Ops *ops, int32_t user_id);
-/* Opens again whichever of the two is not open, as when it was plugged in
- * after the start; a repeated failure is not logged again. PW_OK when
- * either is open. */
+/* Retries missing keyboard indexes and the mouse independently, as when a
+ * device appears after start. Existing handles are retained. A successful
+ * empty keyboard index 0 does not imply that another keyboard index is open.
+ * PW_OK when either kind has an open handle; call periodically regardless. */
 int pw_hid_ps5_retry(PwHidPs5 *hid);
 /* Reads both devices once. */
 void pw_hid_ps5_poll(PwHidPs5 *hid, PwHidPs5Poll *poll);

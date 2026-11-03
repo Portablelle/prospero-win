@@ -103,7 +103,7 @@ pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 int factor_setting = -1, hud_setting = -1;
 VkInstance instance_seen = VK_NULL_HANDLE;
 bool device_loaded = false;
-struct { VkDevice device; VkPhysicalDevice physical; } devices[8];
+struct { VkDevice device; VkPhysicalDevice physical; bool maintenance4; } devices[8];
 struct { VkQueue queue; uint32_t family; VkDevice device; } queues[32];
 Chain *chains[kMaxChains];
 
@@ -160,6 +160,34 @@ VkPhysicalDevice physical_of(VkDevice device)
     for (auto &d : devices)
         if (d.device == device) return d.physical;
     return VK_NULL_HANDLE;
+}
+
+bool maintenance4_enabled(const VkDeviceCreateInfo *info)
+{
+    if (!info) return false;
+    const void *feature = info->pNext;
+    while(feature) {
+        VkBaseInStructure header;
+        memcpy(&header,feature,sizeof(header));
+        if(header.sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
+            VkPhysicalDeviceVulkan13Features value;
+            memcpy(&value,feature,sizeof(value));
+            return value.maintenance4==VK_TRUE;
+        }
+        if(header.sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES) {
+            VkPhysicalDeviceMaintenance4Features value;
+            memcpy(&value,feature,sizeof(value));
+            return value.maintenance4==VK_TRUE;
+        }
+        feature=header.pNext;
+    }
+    return false;
+}
+
+bool maintenance4_of(VkDevice device)
+{
+    for(auto &d:devices) if(d.device==device) return d.maintenance4;
+    return false;
 }
 
 uint32_t family_of(VkQueue queue)
@@ -219,7 +247,7 @@ bool make_image(Chain *c, VkPhysicalDevice physical, VkImageUsageFlags usage, Im
 bool make_font(Chain *c, VkPhysicalDevice physical)
 {
     constexpr uint32_t width = kCellW * kGlyphs, height = kCellH;
-    if (!make_image(c, physical, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, &c->font,
+    if (!make_image(c, physical, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, &c->font,
                     {width, height}))
         return false;
     VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -302,7 +330,9 @@ bool setup_chain(Chain *c)
         fprintf(stderr, "pw_framegen: no generator: %s\n", error);
         return false;
     }
-    if (fg_context_load_network(c->fg, pw_framegen_network, (size_t)(pw_framegen_network_end - pw_framegen_network),
+    if (!maintenance4_of(c->device))
+        fprintf(stderr, "pw_framegen: maintenance4 not enabled by the application: blending instead\n");
+    else if (fg_context_load_network(c->fg, pw_framegen_network, (size_t)(pw_framegen_network_end - pw_framegen_network),
                                 error, sizeof(error)) == VK_SUCCESS)
         c->method = FG_METHOD_NEURAL;
     else
@@ -449,7 +479,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateDevice(VkPhysicalDevice physical, const 
     if (result == VK_SUCCESS) {
         pthread_mutex_lock(&lock);
         for (auto &d : devices)
-            if (!d.device) { d.device = *device; d.physical = physical; break; }
+            if (!d.device) { d.device = *device; d.physical = physical; d.maintenance4 = maintenance4_enabled(info); break; }
         pthread_mutex_unlock(&lock);
     }
     return result;
@@ -494,7 +524,10 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateSwapchainKHR(VkDevice device, const VkSw
     ours.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     VkResult result = real_CreateSwapchainKHR(device, &ours, allocator, handle);
     if (result != VK_SUCCESS) {
-        fprintf(stderr, "pw_framegen: swapchain refused with extra images (%d): without generation\n", (int)result);
+        fprintf(stderr, "pw_framegen: swapchain refused with extra images (%d)\n", (int)result);
+        /* Passing oldSwapchain retires it even when creation fails. The
+         * caller must recreate; a second attempt may not reuse that handle. */
+        if (info->oldSwapchain != VK_NULL_HANDLE) return result;
         return real_CreateSwapchainKHR(device, info, allocator, handle);
     }
     Chain *c = new (std::nothrow) Chain;
@@ -513,7 +546,9 @@ VKAPI_ATTR VkResult VKAPI_CALL fg_CreateSwapchainKHR(VkDevice device, const VkSw
     pthread_mutex_unlock(&lock);
     if (!ok) {
         fprintf(stderr, "pw_framegen: swapchain %ux%u without generation\n", c->extent.width, c->extent.height);
+        pthread_mutex_lock(&lock);
         free_chain(c);
+        pthread_mutex_unlock(&lock);
     }
     return result;
 }
@@ -712,8 +747,10 @@ PFN_vkVoidFunction wrap(const char *name, PFN_vkVoidFunction real)
 
 extern "C" PFN_vkVoidFunction pw_framegen_resolve(VkInstance instance, const char *name, PFN_vkVoidFunction real)
 {
-    if (!name || !real || !factor()) return real;
+    if (!name || !real) return real;
+    pthread_mutex_lock(&lock);
     if (instance) instance_seen = instance;
-    PFN_vkVoidFunction ours = wrap(name, real);
+    PFN_vkVoidFunction ours = factor() ? wrap(name, real) : nullptr;
+    pthread_mutex_unlock(&lock);
     return ours ? ours : real;
 }

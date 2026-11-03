@@ -98,21 +98,28 @@ static void test_inputs(void)
 {
     PwGameInput input;
     PwWineInput events[8];
+    PwWineButtonState buttons={0};
 
     pw_game_input_init(&input);
     assert(pw_game_input_parse((const uint8_t *)preset_text, sizeof(preset_text) - 1, &input) == PW_OK);
-    assert(pw_wine_game_inputs(&input, L1 | CROSS | CIRCLE | SQUARE, 0, events, 8) == 2);
+    assert(pw_wine_game_inputs(&buttons, &input, L1 | CROSS | CIRCLE | SQUARE, 0, events, 8) == 2);
     assert(events[0].type == PW_WINE_INPUT_KEY && events[0].code == 0x20 && events[0].down == 1);
     assert(events[1].code == 'Z' && events[1].down == 1 && !events[1].x && !events[1].y);
 
     /* Releases come first; mouse bindings send buttons; unbound and none send nothing. */
-    assert(pw_wine_game_inputs(&input, R2 | L2, L1 | CROSS, events, 8) == 4);
+    assert(pw_wine_game_inputs(&buttons, &input, R2 | L2, L1 | CROSS, events, 8) == 4);
     assert(events[0].code == 0x20 && !events[0].down && events[1].code == 'Z' && !events[1].down);
     assert(events[2].type == PW_WINE_INPUT_MOUSE_BUTTON && events[2].code == 1 && events[2].down);
     assert(events[3].type == PW_WINE_INPUT_MOUSE_BUTTON && events[3].code == 0 && events[3].down);
-    assert(pw_wine_game_inputs(&input, R1 | L1, 0, events, 1) == 1 && events[0].code == 'Z');
-    assert(pw_wine_game_inputs(&input, 0, 0, events, 8) == 0);
-    assert(pw_wine_game_inputs(NULL, L1, 0, events, 8) == 0 && pw_wine_game_inputs(&input, L1, 0, NULL, 8) == 0);
+    assert(pw_wine_game_inputs(&buttons, &input, R1 | L1, 0, events, 1) == 0 && !(buttons.held & (R1|L1)));
+    assert(pw_wine_game_inputs(&buttons, &input, 0, 0, events, 8) == 0);
+    assert(pw_wine_game_inputs(&buttons, NULL, L1, 0, events, 8) == 0 && pw_wine_game_inputs(&buttons, &input, L1, 0, NULL, 8) == 0);
+    buttons.held=0;
+    input.bindings[0]=(PwGameBinding){CROSS,PW_GAME_BIND_MOUSE,0};
+    assert(pw_wine_game_inputs(&buttons,&input,CROSS|R2,0,events,8)==1);
+    assert(pw_wine_game_inputs(&buttons,&input,0,CROSS,events,8)==0);
+    assert(pw_wine_game_inputs(&buttons,&input,0,R2,events,8)==1 && !events[0].down);
+
 }
 
 static void test_pointer(void)
@@ -326,21 +333,6 @@ static void test_script_pad(void)
     }
 }
 
-static void test_movement(void)
-{
-    uint8_t held = 0;
-    PwWineInput out[4];
-    assert(pw_wine_movement_step(&held, 128, 128, out, 4) == 0);
-    assert(pw_wine_movement_step(&held, 255, 0, out, 4) == 2);
-    assert(held == 9 && out[0].code == 'W' && out[0].down && out[1].code == 'D');
-    assert(pw_wine_movement_step(&held, 170, 90, out, 4) == 0); /* hysteresis */
-    assert(pw_wine_movement_step(&held, 0, 255, out, 3) == 0 && held == 9);
-    assert(pw_wine_movement_step(&held, 0, 255, out, 4) == 4);
-    assert(!out[0].down && !out[1].down && out[2].down && out[3].down);
-    assert(held == 6);
-    assert(pw_wine_movement_step(&held, 128, 128, out, 4) == 2 && held == 0);
-    assert(pw_wine_movement_step(&held, 150, 105, out, 4) == 0);
-}
 
 /* keyboard_stick: one stick drives the four direction keys. Deadzone 25 of
  * 127 counts gives a threshold of 31, with five counts of hysteresis once a
@@ -401,24 +393,50 @@ static int owned_sink(const PwWineInput *input)
 }
 static void test_key_owners(void)
 {
-    PwWineKeyOwners owners={{0}};
+    PwWineInputOwners owners={0};
     PwWineInput key={PW_WINE_INPUT_KEY,0x10,0,0,1};
-    assert(!pw_wine_key_owned_post(&owners,0,owned_sink,&key));
-    assert(!pw_wine_key_owned_post(&owners,1,owned_sink,&key));
-    assert(owned_calls==1);
+    assert(!pw_wine_input_owned_post(&owners,0,owned_sink,&key));
+    assert(!pw_wine_input_owned_post(&owners,1,owned_sink,&key));
+    assert(owned_calls==2);
     key.down=0;
-    assert(!pw_wine_key_owned_post(&owners,1,owned_sink,&key));
-    assert(owned_calls==1 && owners.held[0x10]==1);
-    assert(!pw_wine_key_owned_post(&owners,0,owned_sink,&key));
-    assert(owned_calls==2 && !owners.held[0x10]);
+    assert(!pw_wine_input_owned_post(&owners,1,owned_sink,&key));
+    assert(owned_calls==2 && owners.keys[0x10]==1);
+    assert(!pw_wine_input_owned_post(&owners,0,owned_sink,&key));
+    assert(owned_calls==3 && !owners.keys[0x10]);
     owned_fail=1;key.down=1;
-    assert(pw_wine_key_owned_post(&owners,0,owned_sink,&key)==-1 && !owners.held[0x10]);
+    assert(pw_wine_input_owned_post(&owners,0,owned_sink,&key)==-1 && !owners.keys[0x10]);
     owned_fail=0;
+    /* Independent USB, controller, stick and player-2 ownership. */
+    for(unsigned source=0;source<6;source++)
+        assert(!pw_wine_input_owned_post(&owners,source,owned_sink,&key));
+    key.down=0;
+    for(unsigned source=0;source<5;source++) {
+        assert(!pw_wine_input_owned_post(&owners,source,owned_sink,&key));
+        assert(owners.keys[0x10]);
+    }
+    assert(!pw_wine_input_owned_post(&owners,5,owned_sink,&key) && !owners.keys[0x10]);
+    key=(PwWineInput){PW_WINE_INPUT_MOUSE_BUTTON,0,0,0,1};
+    assert(!pw_wine_input_owned_post(&owners,PW_INPUT_HID,owned_sink,&key));
+    assert(!pw_wine_input_owned_post(&owners,PW_INPUT_PAD,owned_sink,&key));
+    key.down=0;
+    assert(!pw_wine_input_owned_post(&owners,PW_INPUT_PAD,owned_sink,&key));
+    assert(owners.mouse[0]);
+    assert(!pw_wine_input_owned_post(&owners,PW_INPUT_HID,owned_sink,&key) && !owners.mouse[0]);
+    key=(PwWineInput){PW_WINE_INPUT_KEY,'W',0,0,1};
+    assert(!pw_wine_input_owned_post(&owners,PW_INPUT_HID,owned_sink,&key));
+    assert(!pw_wine_input_owned_post(&owners,PW_INPUT_PAD,owned_sink,&key));
+    assert(!pw_wine_input_release_source(&owners,PW_INPUT_HID,owned_sink));
+    assert(owners.keys['W']==(1u<<PW_INPUT_PAD));
+    uint32_t withheld=0;
+    assert(!pw_wine_capture_buttons(0x4000,&withheld,1));
+    assert(!pw_wine_capture_buttons(0x4000,&withheld,0));
+    assert(!pw_wine_capture_buttons(0,&withheld,0));
+    assert(pw_wine_capture_buttons(0x4000,&withheld,0)==0x4000);
+
 }
 
 int main(void)
 {
-    test_movement();
     test_key_owners();
     test_frames();
     test_threads();
@@ -426,7 +444,6 @@ int main(void)
     test_pointer();
     test_pointer_fraction();
     test_keyboard_stick();
-    test_movement();
     test_pad();
     test_script_pad();
     printf("wine display passed: frame box copy, newest frame, refusals, concurrent put/take, "

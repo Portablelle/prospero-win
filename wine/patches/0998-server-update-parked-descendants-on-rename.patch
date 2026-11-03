@@ -1,0 +1,167 @@
+From: Prospero Win local fixes <prospero-win@local>
+Subject: [PATCH] server: preallocate rename paths for parked directory descendants
+
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -168,11 +168,13 @@
+ #ifdef PS5_PARK_DIRECTORIES
+     unsigned int         ps5_parked :1;  /* a directory whose unix_fd is closed until needed */
+     unsigned int         ps5_counted :1; /* counted in ps5_directory_fds */
++    struct list          ps5_directory_entry; /* all tracked directories, parked or open */
+     int                  ps5_park_flags; /* open() flags to open it again with */
+ #endif
+ };
+ 
+ #ifdef PS5_PARK_DIRECTORIES
++static struct list ps5_directories = LIST_INIT(ps5_directories);
+ static unsigned int ps5_directory_fds;  /* directory fds alive, parked or not (see ps5_park_directory) */
+ static int ps5_reopen_directory( struct fd *fd );
+ 
+@@ -1679,7 +1681,7 @@
+     free_async_queue( &fd->wait_q );
+ 
+ #ifdef PS5_PARK_DIRECTORIES
+-    if (fd->ps5_counted) ps5_directory_fds--;
++    if (fd->ps5_counted) { list_remove( &fd->ps5_directory_entry ); ps5_directory_fds--; }
+ #endif
+     if (fd->map_addr) free_map_addr( fd->map_addr, fd->map_size );
+     if (fd->completion) release_object( fd->completion );
+@@ -1931,6 +1933,7 @@
+     {
+         fd->ps5_counted = 1;
+         ps5_directory_fds++;
++        list_add_tail( &ps5_directories, &fd->ps5_directory_entry );
+     }
+     if (!threshold || ps5_directory_fds <= (unsigned int)threshold) return;
+     if (fd->unix_fd == -1 || !fd->inode || !fd->closed || !fd->unix_name || fd->closed->disp_flags ||
+@@ -3080,6 +3083,68 @@
+         ((fd->options & FILE_DELETE_ON_CLOSE) ? FILE_DISPOSITION_DELETE : 0);
+ }
+ 
++#ifdef PS5_PARK_DIRECTORIES
++/* Preallocate every affected absolute name before renaming the parent.
++ * Descendants, including currently open directories that may later park,
++ * must not retain the old prefix. No allocation is needed after rename. */
++struct ps5_rename_path { struct ps5_rename_path *next; struct fd *fd; char *name; };
++static void ps5_finish_rename( struct ps5_rename_path *plan, int apply )
++{
++    while (plan)
++    {
++        struct ps5_rename_path *next = plan->next;
++        if (apply)
++        {
++            free( plan->fd->unix_name );
++            plan->fd->closed->unix_name = plan->fd->unix_name = plan->name;
++        }
++        else free( plan->name );
++        free( plan );
++        plan = next;
++    }
++}
++static struct ps5_rename_path *ps5_prepare_rename( struct fd *fd, const char *name )
++{
++    struct ps5_rename_path *plan = NULL, *item;
++    struct fd *other;
++    const char *slash = strrchr( name, '/' );
++    char *parent, *resolved, *root;
++    size_t parent_size, root_size, old_size = strlen( fd->unix_name );
++
++    if (!slash || !slash[1]) { set_error( STATUS_OBJECT_NAME_INVALID ); return NULL; }
++    parent_size = slash == name ? 1 : slash - name;
++    if (!(parent = mem_alloc( parent_size + 1 ))) return NULL;
++    memcpy( parent, name, parent_size ); parent[parent_size] = 0;
++    resolved = realpath_dup( parent );
++    free( parent );
++    if (!resolved) { file_set_error(); return NULL; }
++    root_size = strlen( resolved ) + strlen( slash + 1 ) + 2;
++    root = mem_alloc( root_size );
++    if (!root) { free( resolved ); return NULL; }
++    snprintf( root, root_size, "%s%s%s", resolved, !strcmp( resolved, "/" ) ? "" : "/", slash + 1 );
++    free( resolved );
++    if (!(plan = mem_alloc( sizeof(*plan) ))) { free( root ); return NULL; }
++    plan->next = NULL; plan->fd = fd; plan->name = root;
++    LIST_FOR_EACH_ENTRY( other, &ps5_directories, struct fd, ps5_directory_entry )
++    {
++        const char *suffix;
++        if (other == fd || !other->unix_name || !other->closed ||
++            strncmp( other->unix_name, fd->unix_name, old_size )) continue;
++        suffix = other->unix_name + old_size;
++        if (*suffix && *suffix != '/') continue;
++        if (!(item = mem_alloc( sizeof(*item) ))) goto failed;
++        item->name = mem_alloc( strlen(root) + strlen(suffix) + 1 );
++        if (!item->name) { free(item); goto failed; }
++        strcpy( item->name, root ); strcat( item->name, suffix );
++        item->fd = other; item->next = plan; plan = item;
++    }
++    return plan;
++failed:
++    ps5_finish_rename( plan, 0 );
++    return NULL;
++}
++#endif
++
+ /* set new name for the fd */
+ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, data_size_t len,
+                          struct unicode_str nt_name, int create_link, unsigned int flags )
+@@ -3088,6 +3153,9 @@
+     struct stat st, st2;
+     char *name;
+     const unsigned int replace = flags & FILE_RENAME_REPLACE_IF_EXISTS;
++#ifdef PS5_PARK_DIRECTORIES
++    struct ps5_rename_path *renames = NULL;
++#endif
+ 
+     PS5_UNPARK_OR_RETURN( fd );
+     if (!fd->inode || !fd->unix_name)
+@@ -3193,6 +3261,9 @@
+         return;
+     }
+ 
++#ifdef PS5_PARK_DIRECTORIES
++    if (!(renames = ps5_prepare_rename( fd, name ))) goto failed;
++#endif
+     if (rename( fd->unix_name, name ))
+     {
+         file_set_error();
+@@ -3211,30 +3282,21 @@
+ 
+     free( fd->nt_name );
+     fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );
++#ifdef PS5_PARK_DIRECTORIES
++    ps5_finish_rename( renames, 1 );
++    renames = NULL;
++#else
+     free( fd->unix_name );
+     fd->closed->unix_name = fd->unix_name = realpath_dup( name );
++    if (!fd->unix_name) set_error( STATUS_NO_MEMORY );
++#endif
+     free( name );
+-    if (!fd->unix_name)
+-        set_error( STATUS_NO_MEMORY );
++    return;
++
++failed:
+ #ifdef PS5_PARK_DIRECTORIES
+-    else
+-    {
+-        /* other handles to this directory that are parked open it again by
+-         * its new name */
+-        struct fd *fd_ptr;
+-        char *unix_name;
+-
+-        LIST_FOR_EACH_ENTRY( fd_ptr, &fd->inode->open, struct fd, inode_entry )
+-        {
+-            if (!fd_ptr->ps5_parked || !(unix_name = strdup( fd->unix_name ))) continue;
+-            free( fd_ptr->unix_name );
+-            fd_ptr->closed->unix_name = fd_ptr->unix_name = unix_name;
+-        }
+-    }
+-#endif
+-    return;
+-
+-failed:
++    ps5_finish_rename( renames, 0 );
++#endif
+     free( name );
+ }
+ 

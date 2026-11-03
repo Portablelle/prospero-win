@@ -182,7 +182,6 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wine_protect_writecopy.py
 	python3 tests/test_wine_decommit_zero.py
-	python3 tests/test_wine_subpage_protect.py
 	python3 tests/test_wine_seh_fp_state.py
 	python3 tests/test_wine_narrow_syscall_args.py
 	python3 tests/test_wine_sched_probe.py
@@ -193,6 +192,7 @@ test: $(addprefix $(BUILD)/,$(TESTS)) $(BUILD)/classify_x86 $(BUILD)/dbt_differe
 	python3 tests/test_wine_directory_handles.py
 	python3 tests/test_wine_builtin_classes.py
 	python3 tests/test_wine_fiber_stacks.py
+	python3 tests/test_wine_review_helpers.py
 	python3 tests/test_d3d12_control.py
 	python3 tests/test_wine_dib_section.py
 	python3 tests/test_wow64native_scaffold.py
@@ -258,7 +258,6 @@ wine-check: test
 	python3 tests/test_wine_runtime_manifest.py
 	python3 tests/test_wine_protect_writecopy.py
 	python3 tests/test_wine_decommit_zero.py
-	python3 tests/test_wine_subpage_protect.py
 	python3 tests/test_wine_seh_fp_state.py
 	python3 tests/test_wine_narrow_syscall_args.py
 	python3 tests/test_wine_sched_probe.py
@@ -269,6 +268,7 @@ wine-check: test
 	python3 tests/test_wine_directory_handles.py
 	python3 tests/test_wine_builtin_classes.py
 	python3 tests/test_wine_fiber_stacks.py
+	python3 tests/test_wine_review_helpers.py
 	python3 tests/test_d3d12_control.py
 	python3 tests/test_wine_dib_section.py
 

@@ -657,3 +657,7 @@ console's address, your own scripts) out of this file: the repository is
 public.
 
 `make test-framegen VULKAN_HEADERS=/path/to/include` exercises the production presentation wrapper with a host Vulkan stub and delayed presentation waits. It covers image-owned semaphore reuse, nonblocking extra-image acquisition, more than sixteen application waits, failed-submission retirement and destroyed-device registry reuse. No GPU is required.
+
+For native keyboard diagnosis, correlate `keyboard read index=... status=... connected=...` with the first `keyboard state index=...` records. A valid index-zero handle alone does not show that the physical keyboard is on that index. The launcher reads accepted indexes 0–3 and retries missing ports independently of the mouse. A Bluetooth keyboard recognized by the PS5 was confirmed working with this multi-index path.
+
+`PROSPERO_WINE_PATCHED_SOURCE=/path/to/patched/wine python3 tests/test_wine_review_helpers.py` compiles the actual patched stack and directory-rename helper functions with injected backing/allocation failures under ASan/UBSan. It checks failed stack creation/growth and descendant identity after parent renames without needing a console.

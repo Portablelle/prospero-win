@@ -31,8 +31,8 @@ static void test_settings_regressions(const char *root)
     assert(!pw_settings_text(&s,text,out,sizeof(out)));
     PwGameProfile parsed;
     assert(pw_game_profile_parse((const uint8_t*)out,strlen(out),&parsed)==PW_OK);
-    assert(parsed.input.keyboard_stick==PW_GAME_STICK_NONE && !parsed.input.left_stick_wasd);
-    assert(parsed.input.stick_keys[0]=='W' && parsed.input.rumble==100);
+    assert(parsed.input.keyboard_stick==PW_GAME_STICK_NONE);
+    assert(parsed.input.stick_keys[0]=='W' && parsed.input.rumble==35);
     /* A missing preset cannot be turned into permanent fallback bindings. */
     strcpy(e.profile.input.preset,"missing");
     assert(pw_settings_open(&s,&e,root)==-1 && !s.open);
@@ -46,7 +46,7 @@ int main(int argc,char **argv)
     PwWineLibraryEntry e={0};strcpy(e.file,"needle.profile");
     assert(pw_game_profile_parse((const uint8_t*)original,strlen(original),&e.profile)==PW_OK);
     PwLauncherSettings s;assert(!pw_settings_open(&s,&e,root));
-    assert(s.input.mouse_speed==900&&s.input.left_stick_wasd);
+    assert(s.input.mouse_speed==900&&s.input.keyboard_stick==PW_GAME_STICK_LEFT);
     s.row=0;pw_settings_change(&s,1);pw_settings_change(&s,1);assert(s.draft.display.width==1920);
     pw_settings_change(&s,1);assert(s.draft.display.width==3840&&s.draft.display.height==2160);
     assert(!pw_settings_text(&s,original,out,sizeof(out)));
@@ -65,13 +65,13 @@ int main(int argc,char **argv)
     assert(strstr(out,"-screen-width 1920 -screen-height 1080"));
     assert(strstr(out,"\"C:\\path with spaces\\log.txt\""));
     assert(strstr(out,"; preserve comment"));assert(strstr(out,"shared_input=true"));
-    assert(strstr(out,"left_stick = wasd"));
+    assert(strstr(out,"keyboard_stick = left_stick") && !strstr(out,"left_stick = wasd"));
     snprintf(path,sizeof(path),"%s/profiles/needle.profile",root);FILE *f=fopen(path,"wb");assert(f);assert(fwrite(original,1,strlen(original),f)==strlen(original));assert(!fclose(f));
     assert(!pw_settings_save(&s,root));
     PwWineLibrary lib;assert(pw_wine_library_load(&lib,root)==PW_OK&&lib.count==1&&lib.entries[0].status==PW_OK);
     assert(lib.entries[0].profile.display.width==1920);
     assert(lib.entries[0].profile.input.mouse_speed==1000);
-    s.row=1;pw_settings_change(&s,1);assert(s.input.left_stick_wasd);pw_settings_change(&s,1);assert(s.input.mouse==PW_GAME_STICK_LEFT&&!s.input.left_stick_wasd);pw_settings_change(&s,1);assert(s.input.mode==PW_GAME_INPUT_XINPUT&&s.input.mouse==PW_GAME_STICK_NONE);
+    s.row=1;pw_settings_change(&s,1);assert(s.input.keyboard_stick==PW_GAME_STICK_LEFT);pw_settings_change(&s,1);assert(s.input.mouse==PW_GAME_STICK_LEFT&&s.input.keyboard_stick==PW_GAME_STICK_NONE);pw_settings_change(&s,1);assert(s.input.mode==PW_GAME_INPUT_XINPUT&&s.input.mouse==PW_GAME_STICK_NONE);
     s.row=3;pw_settings_change(&s,1);assert(s.input.bindings[0].kind==PW_GAME_BIND_MOUSE);assert(!pw_settings_save(&s,root));
     snprintf(path,sizeof(path),"%s/profiles/needle.profile.settings-backup",root);f=fopen(path,"rb");assert(f);size_t n=fread(out,1,sizeof(out)-1,f);fclose(f);out[n]=0;assert(!strcmp(out,original));unlink(path);
     snprintf(path,sizeof(path),"%s/profiles/needle.profile",root);unlink(path);assert(pw_settings_save(&s,root)==-1);

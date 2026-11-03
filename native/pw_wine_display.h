@@ -21,11 +21,17 @@
 #include "../wine/ps5/pw_wine_sink.h"
 #include "pw_pad_ps5.h"
 
-/* Physical/controller input and OSK typing own their key state separately.
- * An owner releasing a key must not release another owner's held key. */
-typedef struct PwWineKeyOwners { uint8_t held[256]; } PwWineKeyOwners;
-int pw_wine_key_owned_post(PwWineKeyOwners *owners, unsigned owner,
-                           int (*sink)(const PwWineInput *), const PwWineInput *input);
+/* Each independent input source owns keys/buttons until it releases them. */
+enum { PW_INPUT_HID, PW_INPUT_PAD, PW_INPUT_PAD2, PW_INPUT_OSK, PW_INPUT_SCRIPT, PW_INPUT_STICK,
+       PW_INPUT_SOURCES = 8 };
+typedef struct PwWineInputOwners { uint8_t keys[256], mouse[3]; } PwWineInputOwners;
+int pw_wine_input_owned_post(PwWineInputOwners *owners, unsigned owner,
+                             int (*sink)(const PwWineInput *), const PwWineInput *input);
+int pw_wine_input_release_source(PwWineInputOwners *owners, unsigned source,
+                                  int (*sink)(const PwWineInput *));
+uint32_t pw_wine_capture_buttons(uint32_t held, uint32_t *withheld, int captured);
+/* Button edges aggregate duplicate bindings before ownership routing. */
+typedef struct PwWineButtonState { uint32_t held; } PwWineButtonState;
 
 typedef struct PwWineFrameBox {
     pthread_mutex_t lock;
@@ -54,8 +60,9 @@ int pw_wine_frame_box_take(PwWineFrameBox *box, uint64_t *seen, uint8_t *out,
 /* Wine input for one pad batch's edges under a profile's bindings: a
  * release for each bound button in released, then a press for each in
  * pressed, as a key or a mouse button. Returns how many were written (at
- * most max). */
-size_t pw_wine_game_inputs(const PwGameInput *input, uint32_t pressed, uint32_t released,
+ * most max). If the buffer cannot hold the full batch, returns 0 without
+ * changing the button state. */
+size_t pw_wine_game_inputs(PwWineButtonState *state, const PwGameInput *input, uint32_t pressed, uint32_t released,
                            PwWineInput *out, size_t max);
 
 /* Digital key emulation for one analog stick. Direction bits are retained
@@ -87,11 +94,6 @@ int pw_wine_game_pad(const PwPadPs5 *pad, PwWinePad *out);
  * without a DualSense. Returns whether it is connected; a neutral pad
  * when not. */
 int pw_wine_script_pad(PwWinePad *pad, int connected, const PwScriptPad *script, int scripted);
-
-/* Emits WASD edges with a dead zone and hysteresis. Centre releases all keys.
- * Capacity must be at least four; state is unchanged otherwise. */
-size_t pw_wine_movement_step(uint8_t *held, uint8_t x, uint8_t y,
-                             PwWineInput *out, size_t max);
 
 /* A stick's pointer motion not yet sent, in 1/65536 pixels. Wine keeps
  * the pointer's position: the title sends only motion, as a mouse does
