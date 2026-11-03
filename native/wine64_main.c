@@ -903,7 +903,7 @@ static void run_launcher(void)
         if (hid.ops.load_module) {
             PwHidPs5Poll poll;
 
-            if (hid_status != PW_OK && tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
+            if (tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
                 hid_status = pw_hid_ps5_retry(&hid);
             pw_hid_ps5_poll(&hid, &poll);
             for (size_t i = 0; i < poll.count && chosen < 0; i++)
@@ -1472,7 +1472,7 @@ int main(int argc, char **argv)
              * Releases still are, so nothing stays held. */
             int dialog = osk_ps5.showing;
 
-            if (hid_status != PW_OK && tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
+            if (tick % (5 * PW_WINE64_TICKS_PER_S) == 0)
                 hid_status = pw_hid_ps5_retry(&hid);
             pw_hid_ps5_poll(&hid, &poll);
             /* Wine keeps the pointer's position; the title sends motion. */

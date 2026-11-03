@@ -15,6 +15,8 @@ static int merged_calls;
 static uint8_t keyboard_state[PW_HID_PS5_KEYBOARD_STATE];
 static uint8_t mouse_records[4 * PW_HID_PS5_MOUSE_RECORD];
 static int mouse_count;
+static int keyboard_ports = 1;
+static uint8_t second_keyboard_state[PW_HID_PS5_KEYBOARD_STATE];
 
 static int32_t fake_load(const char *path)
 {
@@ -25,9 +27,9 @@ static int32_t fake_load(const char *path)
 static int fake_init(void) { return 0; }
 static int fake_keyboard_open(int32_t user, int32_t type, int32_t index, void *param)
 {
-    (void)type; (void)index; (void)param;
+    (void)type; (void)param;
     opened_user = user;
-    return 3;
+    return index < keyboard_ports ? 3 + index : -5;
 }
 static int fake_mouse_open(int32_t user, int32_t type, int32_t index, void *param)
 {
@@ -37,8 +39,8 @@ static int fake_mouse_open(int32_t user, int32_t type, int32_t index, void *para
 }
 static int fake_keyboard_read(int32_t handle, void *state)
 {
-    assert(handle == 3);
-    memcpy(state, keyboard_state, sizeof(keyboard_state));
+    assert(handle == 3 || handle == 4);
+    memcpy(state, handle == 3 ? keyboard_state : second_keyboard_state, sizeof(keyboard_state));
     return 0;
 }
 static int fake_mouse_read(int32_t handle, void *records, int32_t count)
@@ -149,14 +151,14 @@ static void test_open_and_poll(void)
     assert(poll.events[0].kind == PW_HID_EVENT_KEY && poll.events[0].code == 0x11 && poll.events[0].down);
     assert(poll.events[1].code == 'W' && poll.events[1].down);
     assert(poll.events[2].kind == PW_HID_EVENT_BUTTON && poll.events[2].code == 0 && poll.events[2].down);
-    assert(lines == 2);                                   /* the first data is dumped */
+    assert(lines == 3);                                   /* connection plus the first data */
 
     keyboard(0, NULL, 0);
     mouse(0, 2, 0, 0, 0, 0);
     pw_hid_ps5_poll(&hid, &poll);
     assert(poll.count == 3 && !poll.events[0].down && poll.events[0].code == 'W' &&
            poll.events[1].code == 0x11 && !poll.events[2].down);
-    assert(lines == 3);                                   /* an empty keyboard is not dumped */
+    assert(lines == 4);                                   /* an empty keyboard is not dumped */
 
     /* No new records: nothing changes. */
     mouse_count = 0;
@@ -164,11 +166,47 @@ static void test_open_and_poll(void)
     assert(poll.count == 0 && !poll.dx && !poll.dy);
 }
 
+static void test_keyboard_second_port(void)
+{
+    static const uint16_t w[] = { 0x1a };
+    PwHidPs5 hid;
+    PwHidPs5Poll poll;
+    keyboard_loads = mouse_loads = 1;
+    mouse_count = 0;
+    keyboard_ports = 1;
+    keyboard(0, NULL, 0);
+    assert(pw_hid_ps5_open(&hid, &ops, 1000) == PW_OK);
+    assert(hid.keyboard_ports[0] == 3 && hid.keyboard_ports[1] < 0);
+    /* A valid empty port zero and a working mouse must not hide a
+     * keyboard which becomes available on index one after launch. */
+    keyboard_ports = 2;
+    assert(pw_hid_ps5_retry(&hid) == PW_OK && hid.keyboard_ports[1] == 4);
+    memset(second_keyboard_state, 0, sizeof(second_keyboard_state));
+    second_keyboard_state[16] = 1;
+    put32(second_keyboard_state + 20, 1);
+    memcpy(second_keyboard_state + 32, w, sizeof(w));
+    pw_hid_ps5_poll(&hid, &poll);
+    assert(poll.count == 1 && poll.events[0].code == 'W' && poll.events[0].down);
+    /* The same key held on two ports has one press and stays held when
+     * one port disconnects; only the last release reaches Wine. */
+    keyboard(0, w, 1);
+    pw_hid_ps5_poll(&hid, &poll);
+    assert(poll.count == 0);
+    memset(second_keyboard_state, 0, sizeof(second_keyboard_state));
+    pw_hid_ps5_poll(&hid, &poll);
+    assert(poll.count == 0);
+    keyboard(0, NULL, 0);
+    pw_hid_ps5_poll(&hid, &poll);
+    assert(poll.count == 1 && poll.events[0].code == 'W' && !poll.events[0].down);
+    keyboard_ports = 1;
+}
+
 int main(void)
 {
     test_keyboard_layout();
     test_mouse_layout();
     test_open_and_poll();
+    test_keyboard_second_port();
     puts("ps5 usb keyboard and mouse passed");
     return 0;
 }

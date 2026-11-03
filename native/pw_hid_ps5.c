@@ -78,15 +78,24 @@ static void open_keyboard(PwHidPs5 *hid)
         !hid->ops.resolve(module, "sceKeyboardOpen", (void **)&open) &&
         !hid->ops.resolve(module, "sceKeyboardReadState", (void **)&hid->keyboard_read_state)) {
         init_rc = init();
-        handle = open(hid->user_id, 0, 0, param);
+        for (int index = 0; index < PW_HID_PS5_KEYBOARD_PORTS; index++) {
+            if (hid->keyboard_ports[index] >= 0) continue;
+            handle = open(hid->user_id, 0, index, param);
+            if (handle >= 0) {
+                hid->keyboard_ports[index] = handle;
+                if (hid->keyboard < 0) hid->keyboard = handle;
+                snprintf(line, sizeof(line), "keyboard module=%#x init=%#x open=%#x user=%d index=%d", (unsigned)module,
+                         (unsigned)init_rc, (unsigned)handle, hid->user_id, index);
+                logf_(hid, line);
+            }
+        }
     }
-    if (handle >= 0) hid->keyboard = handle;
-    if (handle >= 0 || !hid->keyboard_failed) {
+    if (hid->keyboard < 0 && !hid->keyboard_failed) {
         snprintf(line, sizeof(line), "keyboard module=%#x init=%#x open=%#x user=%d", (unsigned)module,
                  (unsigned)init_rc, (unsigned)handle, (int)hid->user_id);
         logf_(hid, line);
     }
-    hid->keyboard_failed = handle < 0;
+    hid->keyboard_failed = hid->keyboard < 0;
 }
 
 static void open_mouse(PwHidPs5 *hid)
@@ -128,13 +137,15 @@ int pw_hid_ps5_open(PwHidPs5 *hid, const PwHidPs5Ops *ops, int32_t user_id)
     hid->ops = *ops;
     hid->user_id = user_id;
     hid->keyboard = hid->mouse = -1;
+    for (int i = 0; i < PW_HID_PS5_KEYBOARD_PORTS; i++) hid->keyboard_ports[i] = -1;
     return pw_hid_ps5_retry(hid);
 }
 
 int pw_hid_ps5_retry(PwHidPs5 *hid)
 {
     if (!hid || !hid->ops.load_module) return PW_ERR_PRECONDITION;
-    if (hid->keyboard < 0) open_keyboard(hid);
+    for (int i = 0; i < PW_HID_PS5_KEYBOARD_PORTS; i++)
+        if (hid->keyboard_ports[i] < 0) { open_keyboard(hid); break; }
     if (hid->mouse < 0) open_mouse(hid);
     return hid->keyboard >= 0 || hid->mouse >= 0 ? PW_OK : PW_ERR_NOT_FOUND;
 }
@@ -144,19 +155,47 @@ void pw_hid_ps5_poll(PwHidPs5 *hid, PwHidPs5Poll *poll)
     memset(poll, 0, sizeof(*poll));
     if (!hid) return;
     if (hid->keyboard >= 0) {
-        uint8_t state[PW_HID_PS5_KEYBOARD_STATE] = { 0 };
-        PwHidKeyboard now;
-
-        if (hid->keyboard_read_state(hid->keyboard, state) == 0) {
-            pw_hid_ps5_keyboard_state(state, &now);
-            if (hid->keyboard_dumps < PW_HID_PS5_DUMPS && (now.keys[0] || now.modifiers)) {
-                dump(hid, "keyboard state", state, sizeof(state));
-                hid->keyboard_dumps++;
+        PwHidKeyboard combined = { 0 };
+        size_t combined_count = 0;
+        for (int index = 0; index < PW_HID_PS5_KEYBOARD_PORTS; index++) {
+            if (hid->keyboard_ports[index] < 0) continue;
+            uint8_t state[PW_HID_PS5_KEYBOARD_STATE] = { 0 };
+            PwHidKeyboard now;
+            int rc = hid->keyboard_read_state(hid->keyboard_ports[index], state);
+            int connected = rc == 0 && state[16] != 0;
+            if (!hid->keyboard_reported[index] || hid->keyboard_rc[index] != rc ||
+                hid->keyboard_connected[index] != connected) {
+                char line[128];
+                snprintf(line, sizeof(line), "keyboard read index=%d status=%#x connected=%d intercepted=%u", index,
+                         (unsigned)rc, connected, (unsigned)state[8]);
+                logf_(hid, line);
+                hid->keyboard_reported[index] = 1;
+                hid->keyboard_rc[index] = rc;
+                hid->keyboard_connected[index] = (uint8_t)connected;
             }
-            poll->count += pw_hid_keyboard_events(&hid->keys, &now, poll->events + poll->count,
-                                                  PW_HID_PS5_EVENTS - poll->count);
-            hid->keys = now;
+            if (rc == 0) {
+                pw_hid_ps5_keyboard_state(state, &now);
+                if (hid->keyboard_dumps < PW_HID_PS5_DUMPS && (now.keys[0] || now.modifiers)) {
+                    char label[48];
+                    snprintf(label, sizeof(label), "keyboard state index=%d", index);
+                    dump(hid, label, state, sizeof(state));
+                    hid->keyboard_dumps++;
+                }
+                combined.modifiers |= now.modifiers;
+                for (size_t k = 0; k < PW_HID_KEYS; k++) {
+                    uint8_t usage = now.keys[k];
+                    size_t previous;
+                    if (!usage) continue;
+                    for (previous = 0; previous < combined_count; previous++)
+                        if (combined.keys[previous] == usage) break;
+                    if (previous == combined_count && combined_count < PW_HID_KEYS)
+                        combined.keys[combined_count++] = usage;
+                }
+            }
         }
+        poll->count += pw_hid_keyboard_events(&hid->keys, &combined, poll->events + poll->count,
+                                              PW_HID_PS5_EVENTS - poll->count);
+        hid->keys = combined;
     }
     if (hid->mouse >= 0) {
         uint8_t records[PW_HID_PS5_MOUSE_RECORDS * PW_HID_PS5_MOUSE_RECORD];

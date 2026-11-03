@@ -27,6 +27,7 @@ enum {
     PW_HID_PS5_MOUSE_RECORD = 40, PW_HID_PS5_MOUSE_RECORDS = 64,
     PW_HID_PS5_KEYBOARD_STATE = 96, PW_HID_PS5_DUMPS = 3,
     PW_HID_PS5_EVENTS = 2 * (PW_HID_KEYS + 8) + 3,
+    PW_HID_PS5_KEYBOARD_PORTS = 4,
 };
 
 typedef struct PwHidPs5Ops {
@@ -39,6 +40,10 @@ typedef struct PwHidPs5 {
     PwHidPs5Ops ops;
     int32_t user_id;
     int32_t keyboard, mouse;                                  /* handles; -1 when absent */
+    int32_t keyboard_ports[PW_HID_PS5_KEYBOARD_PORTS];
+    int keyboard_reported[PW_HID_PS5_KEYBOARD_PORTS];
+    int keyboard_rc[PW_HID_PS5_KEYBOARD_PORTS];
+    uint8_t keyboard_connected[PW_HID_PS5_KEYBOARD_PORTS];
     int keyboard_failed, mouse_failed;                        /* the last open failed (logged) */
     int (*keyboard_read_state)(int32_t handle, void *state);
     int (*mouse_read)(int32_t handle, void *records, int32_t count);
