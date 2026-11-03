@@ -1,5 +1,5 @@
 From: Prospero Win local fixes <prospero-win@local>
-Subject: [PATCH] server: track all backing-directory renames and duplicates
+Subject: [PATCH] server: preserve directory identity across backing-path renames
 
 --- a/server/fd.c
 +++ b/server/fd.c
@@ -52,7 +52,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
      return fd;
  
  failed:
-@@ -2742,9 +2756,74 @@
+@@ -2742,9 +2756,84 @@
  #endif
  }
  
@@ -80,10 +80,16 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
 +{
 +    struct ps5_rename_path *plan = NULL, *item;
 +    struct fd *other;
++    struct stat identity;
 +    const char *slash = strrchr( name, '/' );
 +    char *parent, *resolved, *root;
 +    size_t parent_size, root_size, old_size = strlen( fd->unix_name );
 +
++    /* A stored path may have been removed and reused while an older fd
++     * remains open. Never rename that replacement on behalf of the old fd. */
++    if (!fd->inode || stat( fd->unix_name, &identity ) ||
++        identity.st_dev != fd->inode->device->dev || identity.st_ino != fd->inode->ino)
++    { set_error( STATUS_FILE_DELETED ); return NULL; }
 +    if (!slash || !slash[1]) { set_error( STATUS_OBJECT_NAME_INVALID ); return NULL; }
 +    parent_size = slash == name ? 1 : slash - name;
 +    if (!(parent = mem_alloc( parent_size + 1 ))) return NULL;
@@ -105,6 +111,10 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
 +            strncmp( other->unix_name, fd->unix_name, old_size )) continue;
 +        suffix = other->unix_name + old_size;
 +        if (*suffix && *suffix != '/') continue;
++        /* Only aliases/descendants that still name their own backing inode
++         * participate. A deleted predecessor may have the same old prefix. */
++        if (!other->inode || stat( other->unix_name, &identity ) ||
++            identity.st_dev != other->inode->device->dev || identity.st_ino != other->inode->ino) continue;
 +        if (!(item = mem_alloc( sizeof(*item) ))) goto failed;
 +        item->name = mem_alloc( strlen(root) + strlen(suffix) + 1 );
 +        if (!item->name) { free(item); goto failed; }
@@ -127,7 +137,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
      struct stat st;
      size_t len;
  
-@@ -2783,13 +2862,26 @@
+@@ -2783,13 +2872,26 @@
          memcpy( reparse_name, fd->unix_name, len );
          strcpy( reparse_name + len, "?" );
  
@@ -154,7 +164,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
      }
  }
  
-@@ -2842,6 +2934,9 @@
+@@ -2842,6 +2944,9 @@
  {
      const REPARSE_DATA_BUFFER *data = get_req_data();
      char *base_name;
@@ -164,7 +174,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
      size_t len;
  
      PS5_UNPARK_OR_RETURN( fd );
-@@ -2881,15 +2976,26 @@
+@@ -2881,15 +2986,26 @@
      memcpy( base_name, fd->unix_name, len - 1 );
      base_name[len - 1] = 0;
  
@@ -192,7 +202,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
  
      xattr_fremove( fd->unix_fd, XATTR_REPARSE );
  }
-@@ -3088,6 +3194,9 @@
+@@ -3088,6 +3204,9 @@
      struct stat st, st2;
      char *name;
      const unsigned int replace = flags & FILE_RENAME_REPLACE_IF_EXISTS;
@@ -202,7 +212,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
  
      PS5_UNPARK_OR_RETURN( fd );
      if (!fd->inode || !fd->unix_name)
-@@ -3193,6 +3302,9 @@
+@@ -3193,6 +3312,9 @@
          return;
      }
  
@@ -212,7 +222,7 @@ Subject: [PATCH] server: track all backing-directory renames and duplicates
      if (rename( fd->unix_name, name ))
      {
          file_set_error();
-@@ -3211,30 +3323,21 @@
+@@ -3211,30 +3333,21 @@
  
      free( fd->nt_name );
      fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );

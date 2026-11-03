@@ -145,8 +145,12 @@ DIRECTORY_HEADER = r'''
 #include <sys/stat.h>
 #include "wine/list.h"
 #define STATUS_OBJECT_NAME_INVALID 1
+#define STATUS_FILE_DELETED 2
 struct closed_fd {char *unix_name;};
-struct fd {char *unix_name;struct closed_fd *closed;struct list ps5_directory_entry;};
+struct device {dev_t dev;};
+struct inode {struct device *device;ino_t ino;};
+struct fd {char *unix_name;struct closed_fd *closed;struct list ps5_directory_entry;
+           struct inode *inode,identity;struct device device;};
 static struct list ps5_directories=LIST_INIT(ps5_directories);
 static unsigned fail_alloc, allocs;
 static void set_error(int status){(void)status;}
@@ -155,7 +159,12 @@ static void *mem_alloc(size_t size){if(++allocs==fail_alloc)return NULL;return m
 '''
 DIRECTORY_TEST = r'''
 static void register_fd(struct fd *fd,struct closed_fd *closed,const char *name)
-{fd->unix_name=strdup(name);fd->closed=closed;closed->unix_name=fd->unix_name;list_add_tail(&ps5_directories,&fd->ps5_directory_entry);}
+{
+    struct stat st;assert(!stat(name,&st));
+    fd->device.dev=st.st_dev;fd->identity=(struct inode){&fd->device,st.st_ino};fd->inode=&fd->identity;
+    fd->unix_name=strdup(name);fd->closed=closed;closed->unix_name=fd->unix_name;
+    list_add_tail(&ps5_directories,&fd->ps5_directory_entry);
+}
 int main(void)
 {
     char temp[]="/tmp/pw-rename-XXXXXX",old[PATH_MAX],next[PATH_MAX],child[PATH_MAX],sibling[PATH_MAX],blocked[PATH_MAX],entry[PATH_MAX];
@@ -184,6 +193,23 @@ int main(void)
     plan=ps5_prepare_rename(&root,blocked);assert(plan);
     assert(rename(root.unix_name,blocked)==-1);ps5_finish_rename(plan,0);
     assert(!strcmp(root.unix_name,next)&&!access(one.unix_name,F_OK));
+    // An unlinked open predecessor must not follow a replacement's rename.
+    char reused[PATH_MAX],moved[PATH_MAX];
+    snprintf(reused,sizeof(reused),"%s/reused",temp);snprintf(moved,sizeof(moved),"%s/moved",temp);
+    assert(!mkdir(reused,0700));
+    struct fd detached,replacement;struct closed_fd cd,cp;
+    register_fd(&detached,&cd,reused);
+    int detached_fd=open(reused,O_RDONLY|O_DIRECTORY);assert(detached_fd>=0);
+    assert(!rmdir(reused) && !mkdir(reused,0700));
+    register_fd(&replacement,&cp,reused);
+    assert(!ps5_prepare_rename(&detached,moved)); // cannot rename another inode
+    plan=ps5_prepare_rename(&replacement,moved);assert(plan);
+    assert(!rename(reused,moved));ps5_finish_rename(plan,1);
+    assert(!strcmp(detached.unix_name,reused) && !strcmp(replacement.unix_name,moved));
+    assert(!fstat(detached_fd,&expected) && !stat(moved,&actual));
+    assert(expected.st_ino!=actual.st_ino || expected.st_dev!=actual.st_dev);
+    close(detached_fd);assert(!rmdir(moved));
+    free(detached.unix_name);free(replacement.unix_name);
     assert(!rmdir(one.unix_name)&&!rmdir(next)&&!rmdir(sibling)&&!unlink(entry)&&!rmdir(blocked)&&!rmdir(temp));
     free(root.unix_name);free(one.unix_name);free(two.unix_name);free(other.unix_name);
     puts("Wine parked directory rename: descendants keep their inode, sibling prefixes stay unchanged, allocation/rename failures preserve names");
