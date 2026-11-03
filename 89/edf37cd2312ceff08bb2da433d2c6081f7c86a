@@ -1,0 +1,46 @@
+PUBLICATION_ALLOWLIST.txt
+  h_20ba7e744b2e01 661
+native/pw_launcher_settings.c
+  h_20ba7e744b2e01 22,56,60-61,64,117,128,130
+native/pw_wine_display.c
+  h_20ba7e744b2e01 43-77
+native/pw_wine_display.h
+  h_20ba7e744b2e01 33-50
+native/wine64_main.c
+  h_20ba7e744b2e01 396,401-403,1096-1097,1473-1488,1507,1590-1591,1630-1631,1674,1678,1682,1795-1797
+src/pw_game_profile.c
+  h_20ba7e744b2e01 4,106-124,599-627
+src/pw_game_profile.h
+  h_20ba7e744b2e01 206-211
+tests/test_pw_framegen.cpp
+  h_20ba7e744b2e01 118-119,121-122,124,136-137,166-169
+tests/test_pw_install.py
+  h_20ba7e744b2e01 212,361-367
+tests/test_pw_launcher_settings.c
+  h_20ba7e744b2e01 36-42
+tests/test_pw_wine_display.c
+  h_20ba7e744b2e01 448-474,478
+tests/test_wine_review_helpers.py
+  h_20ba7e744b2e01 85-86
+tools/pw_install.py
+  h_20ba7e744b2e01 150-154,765-767,769-771,891-903
+wine/patches/0997-ntdll-check-stack-backing.patch
+  h_20ba7e744b2e01 82
+wine/patches/0998-server-update-parked-descendants-on-rename.patch
+  h_20ba7e744b2e01 2,55-56,121-195,205,215
+wine/patches/0999-xinput-probe-secondary-arrivals-without-absence-cache.patch
+  h_20ba7e744b2e01 1-38
+wine/ps5/pw_framegen.cpp
+  h_20ba7e744b2e01 378-380,631-634
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "89edf37cd2312ceff08bb2da433d2c6081f7c86a",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
