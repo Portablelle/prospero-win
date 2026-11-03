@@ -1,0 +1,20 @@
+native/pw_wine_display.c
+  h_20ba7e744b2e01 167-171
+tests/test_pw_framegen.cpp
+  h_20ba7e744b2e01 122,125,128,157
+tests/test_pw_wine_display.c
+  h_20ba7e744b2e01 131-132
+wine/ps5/pw_framegen.cpp
+  h_20ba7e744b2e01 767-772,783,797,803,819,948
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "273433321fa47180a0891920d90d4e9b192dcc5c",
+  "prompts": {},
+  "humans": {
+    "h_20ba7e744b2e01": {
+      "author": "Portablelle <jojo_92100@hotmail.com>"
+    }
+  }
+}
